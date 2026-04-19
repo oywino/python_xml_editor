@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.1.7';
+  const APP_VERSION = 'v0.1.8';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -941,13 +941,9 @@
 
       const closing = document.createElement('div');
       closing.className = 'node-card element-frame-footer';
-      const grip2 = document.createElement('div');
-      grip2.className = 'grip';
-      grip2.textContent = '⋮⋮';
-      closing.appendChild(grip2);
       const spacer = document.createElement('div');
-      spacer.style.width = '28px';
-      spacer.style.marginLeft = '4px';
+      spacer.style.width = '70px';
+      spacer.style.flex = '0 0 auto';
       closing.appendChild(spacer);
       const main2 = document.createElement('div');
       main2.className = 'node-main';
