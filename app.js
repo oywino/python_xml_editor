@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.2.4';
+  const APP_VERSION = 'v0.2.5';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -868,6 +868,11 @@
     const card = document.createElement('div');
     card.className = 'node-card element-frame-header';
     card.draggable = true;
+    card.addEventListener('dblclick', (e) => {
+      if (e.target.closest('button, input, textarea')) return;
+      state.collapsed[node.id] = !state.collapsed[node.id];
+      render();
+    });
     let dragDepth = 0;
     card.addEventListener('dragstart', (e) => {
       state.dragNodeId = node.id;
