@@ -387,6 +387,18 @@ button {
   box-shadow: 0 0 0 3px rgba(59,130,246,.12);
 }
 
+.drag-over-before {
+  box-shadow: inset 0 3px 0 #2563eb, 0 0 0 3px rgba(59,130,246,.12);
+}
+
+.drag-over-after {
+  box-shadow: inset 0 -3px 0 #2563eb, 0 0 0 3px rgba(59,130,246,.12);
+}
+
+.drag-over-child {
+  box-shadow: 0 0 0 3px rgba(59,130,246,.12);
+}
+
 .element-frame-header,
 .element-frame-footer {
   min-height: 44px;

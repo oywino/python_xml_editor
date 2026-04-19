@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.2.2';
+  const APP_VERSION = 'v0.2.4';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -386,13 +386,62 @@
   function moveNode(nodes, nodeId, target) {
     const entry = findNodeById(nodes, nodeId);
     if (!entry) return nodes;
+    const { siblings: sourceSiblings, parentId: sourceParentId } = getNodeChildrenSiblings(nodes, nodeId);
+    const sourceIndex = sourceSiblings.findIndex((n) => n.id === nodeId);
     const targetParent = target.parentId ? findNodeById(nodes, target.parentId) : null;
     if (targetParent && isDescendant(entry, target.parentId)) return nodes;
+    let targetIndex = target.index;
+    if (sourceParentId === target.parentId && sourceIndex !== -1 && sourceIndex < targetIndex) {
+      targetIndex -= 1;
+    }
     const movedNode = JSON.parse(JSON.stringify(entry));
     movedNode.parent = target.parentId || undefined;
     let result = removeNodeById(nodes, nodeId);
-    result = insertNodeAt(result, movedNode, target.parentId, target.index);
+    result = insertNodeAt(result, movedNode, target.parentId, targetIndex);
     return result;
+  }
+
+  function getDropTarget(nodes, draggedId, targetNode, clientY, rect) {
+    if (!draggedId || draggedId === targetNode.id) return null;
+
+    const draggedContext = getNodeChildrenSiblings(nodes, draggedId);
+    const targetContext = getNodeChildrenSiblings(nodes, targetNode.id);
+    const sameParent = draggedContext.parentId === targetContext.parentId;
+    const relativeY = clientY - rect.top;
+    const edgeBand = Math.min(Math.max(rect.height * 0.25, 18), 40);
+
+    if (sameParent) {
+      const targetIndex = targetContext.siblings.findIndex((n) => n.id === targetNode.id);
+      if (targetIndex === -1) return null;
+
+      if (relativeY <= edgeBand) {
+        return {
+          mode: 'before',
+          parentId: targetContext.parentId,
+          index: targetIndex,
+        };
+      }
+
+      if (relativeY >= rect.height - edgeBand) {
+        return {
+          mode: 'after',
+          parentId: targetContext.parentId,
+          index: targetIndex + 1,
+        };
+      }
+
+      return {
+        mode: 'child',
+        parentId: targetNode.id,
+        index: targetNode.children.length,
+      };
+    }
+
+    return {
+      mode: 'child',
+      parentId: targetNode.id,
+      index: targetNode.children.length,
+    };
   }
 
   function cloneDoc(doc) {
@@ -809,6 +858,12 @@
 
     const frame = document.createElement('div');
     frame.className = 'element-frame';
+    const clearDropClasses = () => frame.classList.remove('drag-over', 'drag-over-before', 'drag-over-after', 'drag-over-child');
+    const applyDropClasses = (mode) => {
+      clearDropClasses();
+      if (!mode) return;
+      frame.classList.add('drag-over', `drag-over-${mode}`);
+    };
 
     const card = document.createElement('div');
     card.className = 'node-card element-frame-header';
@@ -824,32 +879,37 @@
       state.dragNodeId = null;
       dragDepth = 0;
       frame.classList.remove('dragging');
-      document.querySelectorAll('.drag-over').forEach((el) => el.classList.remove('drag-over'));
+      document.querySelectorAll('.drag-over, .drag-over-before, .drag-over-after, .drag-over-child').forEach((el) => {
+        el.classList.remove('drag-over', 'drag-over-before', 'drag-over-after', 'drag-over-child');
+      });
     });
 
     frame.addEventListener('dragenter', (e) => {
       e.preventDefault();
       if (!state.dragNodeId || state.dragNodeId === node.id) return;
       dragDepth += 1;
-      frame.classList.add('drag-over');
+      const target = getDropTarget(nodes, state.dragNodeId, node, e.clientY, frame.getBoundingClientRect());
+      applyDropClasses(target?.mode);
     });
     frame.addEventListener('dragover', (e) => {
       e.preventDefault();
       if (!state.dragNodeId || state.dragNodeId === node.id) return;
-      frame.classList.add('drag-over');
+      const target = getDropTarget(nodes, state.dragNodeId, node, e.clientY, frame.getBoundingClientRect());
+      applyDropClasses(target?.mode);
     });
     frame.addEventListener('dragleave', () => {
       dragDepth = Math.max(0, dragDepth - 1);
-      if (dragDepth === 0) frame.classList.remove('drag-over');
+      if (dragDepth === 0) clearDropClasses();
     });
     frame.addEventListener('drop', (e) => {
       e.preventDefault();
       e.stopPropagation();
       dragDepth = 0;
-      frame.classList.remove('drag-over');
+      clearDropClasses();
       const dragged = e.dataTransfer.getData('text/plain');
-      if (dragged && dragged !== node.id) {
-        updateRoot(moveNode(nodes, dragged, { parentId: node.id, index: node.children.length }));
+      const target = getDropTarget(nodes, dragged, node, e.clientY, frame.getBoundingClientRect());
+      if (dragged && dragged !== node.id && target) {
+        updateRoot(moveNode(nodes, dragged, { parentId: target.parentId, index: target.index }));
       }
     });
 
