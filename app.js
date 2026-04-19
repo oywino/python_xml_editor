@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.1.8';
+  const APP_VERSION = 'v0.2.0';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -393,6 +393,41 @@
     return JSON.stringify(a) === JSON.stringify(b);
   }
 
+  function collectElementIds(nodes, ids = new Set()) {
+    for (const node of nodes) {
+      if (node.type !== 'element') continue;
+      ids.add(node.id);
+      collectElementIds(node.children, ids);
+    }
+    return ids;
+  }
+
+  function buildInitialCollapsedState(doc) {
+    const collapsed = {};
+
+    function visit(nodes, depth) {
+      for (const node of nodes) {
+        if (node.type !== 'element') continue;
+        if (depth > 0) collapsed[node.id] = true;
+        visit(node.children, depth + 1);
+      }
+    }
+
+    visit(doc.root, 0);
+    return collapsed;
+  }
+
+  function syncCollapsedState(doc, source = state.collapsed) {
+    const validIds = collectElementIds(doc.root);
+    const next = {};
+
+    for (const [id, isCollapsed] of Object.entries(source || {})) {
+      if (validIds.has(id) && isCollapsed) next[id] = true;
+    }
+
+    return next;
+  }
+
   function loadDocIntoState(doc) {
     state.doc = doc;
     state.preambleVal = doc.preamble;
@@ -445,7 +480,7 @@
   }
 
   function setDoc(doc, opts = {}) {
-    const { recordHistory = true } = opts;
+    const { recordHistory = true, resetCollapsed = false } = opts;
     commitPendingHistory();
 
     if (state.doc && docsEqual(state.doc, doc)) return;
@@ -455,6 +490,7 @@
     }
 
     loadDocIntoState(doc);
+    state.collapsed = resetCollapsed ? buildInitialCollapsedState(doc) : syncCollapsedState(doc, state.collapsed);
     render();
   }
 
@@ -469,6 +505,7 @@
     state.historyFuture.push(cloneDoc(state.doc));
     const previous = state.historyPast.pop();
     loadDocIntoState(previous);
+    state.collapsed = syncCollapsedState(previous, state.collapsed);
     state.preambleEditing = false;
     render();
   }
@@ -480,6 +517,7 @@
     pushHistorySnapshot(state.doc);
     const next = state.historyFuture.pop();
     loadDocIntoState(next);
+    state.collapsed = syncCollapsedState(next, state.collapsed);
     state.preambleEditing = false;
     render();
   }
@@ -1016,7 +1054,7 @@
         if (!window.confirm('Start a new document? Unsaved changes will be lost.')) return;
         state.showRaw = false;
         state.preambleEditing = false;
-        setDoc(parseDocument('# New Prompt\n\n<prompt>\n  \n</prompt>'));
+        setDoc(parseDocument('# New Prompt\n\n<prompt>\n  \n</prompt>'), { resetCollapsed: true });
       },
     });
     toolbar.appendChild(newBtn);
@@ -1034,7 +1072,7 @@
         const text = String(ev.target?.result || '');
         state.showRaw = false;
         state.preambleEditing = false;
-        setDoc(parseDocument(text));
+        setDoc(parseDocument(text), { resetCollapsed: true });
       };
       reader.readAsText(file);
       input.value = '';
@@ -1412,6 +1450,7 @@
     state.historyFuture = [];
     state.pendingHistory = null;
     loadDocIntoState(parseDocument(SAMPLE_DOC));
+    state.collapsed = buildInitialCollapsedState(state.doc);
     window.addEventListener('keydown', handleGlobalKeydown);
     startHeartbeat();
     render();
