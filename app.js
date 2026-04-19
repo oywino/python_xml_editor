@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.1.4';
+  const APP_VERSION = 'v0.1.5';
   const HEARTBEAT_INTERVAL_MS = 5000;
   let idCounter = 0;
   const XML_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]*$/;
@@ -403,10 +403,95 @@
       .replace(/"/g, '&quot;');
   }
 
-  function icon(text) {
-    const span = document.createElement('span');
-    span.textContent = text;
-    return span;
+  function createTagIcon() {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('class', 'tag-symbol');
+    svg.setAttribute('aria-hidden', 'true');
+
+    const tagPath = document.createElementNS(ns, 'path');
+    tagPath.setAttribute('d', 'M2.5 5.5V2.5H5.5L13.5 10.5L10.5 13.5L2.5 5.5Z');
+    tagPath.setAttribute('fill', 'none');
+    tagPath.setAttribute('stroke', 'currentColor');
+    tagPath.setAttribute('stroke-width', '1.5');
+    tagPath.setAttribute('stroke-linejoin', 'round');
+
+    const hole = document.createElementNS(ns, 'circle');
+    hole.setAttribute('cx', '4.5');
+    hole.setAttribute('cy', '4.5');
+    hole.setAttribute('r', '0.9');
+    hole.setAttribute('fill', 'currentColor');
+
+    svg.append(tagPath, hole);
+    return svg;
+  }
+
+  function createTrashIcon() {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('class', 'delete-icon');
+    svg.setAttribute('aria-hidden', 'true');
+
+    const lid = document.createElementNS(ns, 'path');
+    lid.setAttribute('d', 'M5.5 3.5H10.5');
+    lid.setAttribute('fill', 'none');
+    lid.setAttribute('stroke', 'currentColor');
+    lid.setAttribute('stroke-width', '1.5');
+    lid.setAttribute('stroke-linecap', 'round');
+
+    const rim = document.createElementNS(ns, 'path');
+    rim.setAttribute('d', 'M3 4.5H13');
+    rim.setAttribute('fill', 'none');
+    rim.setAttribute('stroke', 'currentColor');
+    rim.setAttribute('stroke-width', '1.5');
+    rim.setAttribute('stroke-linecap', 'round');
+
+    const body = document.createElementNS(ns, 'path');
+    body.setAttribute('d', 'M4.5 5.5L5.1 12.5C5.15 13.05 5.61 13.5 6.17 13.5H9.83C10.39 13.5 10.85 13.05 10.9 12.5L11.5 5.5');
+    body.setAttribute('fill', 'none');
+    body.setAttribute('stroke', 'currentColor');
+    body.setAttribute('stroke-width', '1.5');
+    body.setAttribute('stroke-linecap', 'round');
+    body.setAttribute('stroke-linejoin', 'round');
+
+    const leftLine = document.createElementNS(ns, 'path');
+    leftLine.setAttribute('d', 'M6.5 7V11.5');
+    leftLine.setAttribute('fill', 'none');
+    leftLine.setAttribute('stroke', 'currentColor');
+    leftLine.setAttribute('stroke-width', '1.5');
+    leftLine.setAttribute('stroke-linecap', 'round');
+
+    const rightLine = document.createElementNS(ns, 'path');
+    rightLine.setAttribute('d', 'M9.5 7V11.5');
+    rightLine.setAttribute('fill', 'none');
+    rightLine.setAttribute('stroke', 'currentColor');
+    rightLine.setAttribute('stroke-width', '1.5');
+    rightLine.setAttribute('stroke-linecap', 'round');
+
+    svg.append(lid, rim, body, leftLine, rightLine);
+    return svg;
+  }
+
+  function createArrowIcon(direction) {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('class', 'arrow-icon');
+    svg.setAttribute('aria-hidden', 'true');
+
+    const triangle = document.createElementNS(ns, 'path');
+    const pathByDirection = {
+      up: 'M8 4L12.5 11H3.5L8 4Z',
+      down: 'M3.5 5L12.5 5L8 12Z',
+      right: 'M5 3.5L12 8L5 12.5V3.5Z',
+    };
+    triangle.setAttribute('d', pathByDirection[direction] || pathByDirection.down);
+    triangle.setAttribute('fill', 'currentColor');
+
+    svg.appendChild(triangle);
+    return svg;
   }
 
   function btn(label, opts = {}) {
@@ -546,7 +631,7 @@
     del.type = 'button';
     del.className = 'action-btn red';
     del.title = 'Delete text node';
-    del.textContent = '🗑';
+    del.appendChild(createTrashIcon());
     del.addEventListener('click', () => updateRoot(removeNodeById(nodes, node.id)));
     actions.appendChild(del);
     wrap.appendChild(actions);
@@ -614,8 +699,10 @@
     expand.type = 'button';
     expand.className = 'expand-btn';
     const hasChildren = node.children.length > 0;
-    expand.textContent = hasChildren ? (state.collapsed[node.id] ? '▸' : '▾') : '';
     expand.title = state.collapsed[node.id] ? 'Expand' : 'Collapse';
+    if (hasChildren) {
+      expand.appendChild(createArrowIcon(state.collapsed[node.id] ? 'right' : 'down'));
+    }
     expand.addEventListener('click', () => {
       state.collapsed[node.id] = !state.collapsed[node.id];
       render();
@@ -625,10 +712,7 @@
     const main = document.createElement('div');
     main.className = 'node-main';
 
-    const tagSymbol = document.createElement('span');
-    tagSymbol.className = 'tag-symbol';
-    tagSymbol.textContent = '🏷';
-    main.appendChild(tagSymbol);
+    main.appendChild(createTagIcon());
 
     const tagWrap = document.createElement('div');
     const tagBtn = document.createElement('button');
@@ -672,7 +756,7 @@
     moveUpBtn.type = 'button';
     moveUpBtn.className = 'action-btn';
     moveUpBtn.title = 'Move up';
-    moveUpBtn.textContent = '▲';
+    moveUpBtn.appendChild(createArrowIcon('up'));
     moveUpBtn.addEventListener('click', () => {
       const { siblings, parentId } = getNodeChildrenSiblings(nodes, node.id);
       const idx = siblings.findIndex((n) => n.id === node.id);
@@ -688,7 +772,7 @@
     moveDownBtn.type = 'button';
     moveDownBtn.className = 'action-btn';
     moveDownBtn.title = 'Move down';
-    moveDownBtn.textContent = '▼';
+    moveDownBtn.appendChild(createArrowIcon('down'));
     moveDownBtn.addEventListener('click', () => {
       const { siblings, parentId } = getNodeChildrenSiblings(nodes, node.id);
       const idx = siblings.findIndex((n) => n.id === node.id);
@@ -736,7 +820,7 @@
     deleteBtn.type = 'button';
     deleteBtn.className = 'action-btn red';
     deleteBtn.title = 'Delete';
-    deleteBtn.textContent = '🗑';
+    deleteBtn.appendChild(createTrashIcon());
     deleteBtn.addEventListener('click', () => updateRoot(removeNodeById(nodes, node.id)));
     actions.appendChild(deleteBtn);
 
@@ -764,10 +848,7 @@
       closing.appendChild(spacer);
       const main2 = document.createElement('div');
       main2.className = 'node-main';
-      const tagSymbol2 = document.createElement('span');
-      tagSymbol2.className = 'tag-symbol';
-      tagSymbol2.textContent = '🏷';
-      main2.appendChild(tagSymbol2);
+      main2.appendChild(createTagIcon());
       const closingTag = document.createElement('span');
       closingTag.className = 'tag-pill-closing';
       closingTag.textContent = `</${node.tag}>`;
