@@ -24,7 +24,7 @@ The app runs entirely locally. Python serves the static files, and the browser h
 
 ## Project Structure
 
-- `app.py`: local launcher that serves the app and opens the browser
+- `XML_Editor.py`: local launcher that serves the app and opens the browser
 - `index.html`: single HTML mount point
 - `app.js`: main application logic, parsing, tree editing, rendering, and export
 - `style.css`: application styling
@@ -41,13 +41,13 @@ The app runs entirely locally. Python serves the static files, and the browser h
 From the repository root:
 
 ```bash
-python app.py
+python XML_Editor.py
 ```
 
 If your machine uses the Windows launcher instead of `python`, you can also use:
 
 ```bash
-py app.py
+py XML_Editor.py
 ```
 
 The launcher will:
@@ -75,7 +75,7 @@ This repository includes:
 
 The application has two parts:
 
-1. a Python wrapper in `app.py` that starts a local HTTP server
+1. a Python wrapper in `XML_Editor.py` that starts a local HTTP server
 2. a plain JavaScript single-page app in `app.js` that parses mixed preamble + XML text into a tree, renders it visually, and serializes it back out for export
 
 The editor keeps all state in memory in the browser session and does not currently save automatically.

@@ -24,13 +24,13 @@ Suggested branch prefixes:
 ## Local Run
 
 ```bash
-python app.py
+python XML_Editor.py
 ```
 
 If needed on Windows:
 
 ```bash
-py app.py
+py XML_Editor.py
 ```
 
 ## Project Expectations

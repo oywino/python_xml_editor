@@ -4,14 +4,14 @@
 
 The application has two layers:
 
-1. `app.py` launches a local HTTP server and opens the browser.
+1. `XML_Editor.py` launches a local HTTP server and opens the browser.
 2. `app.js` implements the editor as a plain JavaScript single-page app.
 
 There is no backend API, database, or framework runtime. All editing happens in memory in the browser.
 
 ## Runtime Flow
 
-1. `app.py` finds a free local port.
+1. `XML_Editor.py` finds a free local port.
 2. It serves the repository directory with `http.server`.
 3. It opens `index.html` in the default browser.
 4. The browser loads `app.js` and initializes the editor with a sample document.
@@ -98,4 +98,4 @@ The app supports two export modes:
 
 - there is currently no persistent storage layer
 - there are no third-party package managers or dependencies
-- most future changes will happen in `app.js`, with `style.css` for UI styling and `app.py` only for launcher behavior
+- most future changes will happen in `app.js`, with `style.css` for UI styling and `XML_Editor.py` only for launcher behavior

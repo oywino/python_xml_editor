@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.1.3';
+  const APP_VERSION = 'v0.1.4';
   const HEARTBEAT_INTERVAL_MS = 5000;
   let idCounter = 0;
   const XML_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]*$/;
@@ -443,13 +443,13 @@
       input.classList.add('error');
       errorLine.textContent = `⚠ ${message}`;
       errorLine.classList.remove('hidden');
-      container.closest('.node-card')?.classList.add('error');
+      container.closest('.element-frame, .node-card')?.classList.add('error');
     }
 
     function clearError() {
       input.classList.remove('error');
       errorLine.classList.add('hidden');
-      container.closest('.node-card')?.classList.remove('error');
+      container.closest('.element-frame, .node-card')?.classList.remove('error');
     }
 
     function save() {
@@ -559,30 +559,46 @@
     const row = document.createElement('div');
     row.className = `node-row node-indent-${Math.min(depth, 10)}`;
 
+    const frame = document.createElement('div');
+    frame.className = 'element-frame';
+
     const card = document.createElement('div');
-    card.className = 'node-card';
+    card.className = 'node-card element-frame-header';
     card.draggable = true;
+    let dragDepth = 0;
     card.addEventListener('dragstart', (e) => {
       state.dragNodeId = node.id;
-      card.classList.add('dragging');
+      frame.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', node.id);
     });
     card.addEventListener('dragend', () => {
       state.dragNodeId = null;
-      card.classList.remove('dragging');
+      dragDepth = 0;
+      frame.classList.remove('dragging');
       document.querySelectorAll('.drag-over').forEach((el) => el.classList.remove('drag-over'));
     });
-    card.addEventListener('dragover', (e) => {
+
+    frame.addEventListener('dragenter', (e) => {
       e.preventDefault();
       if (!state.dragNodeId || state.dragNodeId === node.id) return;
-      card.classList.add('drag-over');
+      dragDepth += 1;
+      frame.classList.add('drag-over');
     });
-    card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
-    card.addEventListener('drop', (e) => {
+    frame.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (!state.dragNodeId || state.dragNodeId === node.id) return;
+      frame.classList.add('drag-over');
+    });
+    frame.addEventListener('dragleave', () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) frame.classList.remove('drag-over');
+    });
+    frame.addEventListener('drop', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      card.classList.remove('drag-over');
+      dragDepth = 0;
+      frame.classList.remove('drag-over');
       const dragged = e.dataTransfer.getData('text/plain');
       if (dragged && dragged !== node.id) {
         updateRoot(moveNode(nodes, dragged, { parentId: node.id, index: node.children.length }));
@@ -725,20 +741,19 @@
     actions.appendChild(deleteBtn);
 
     card.appendChild(actions);
-    row.appendChild(card);
+    frame.appendChild(card);
 
     const isCollapsed = !!state.collapsed[node.id];
     if (!isCollapsed && hasChildren) {
       const childrenWrap = document.createElement('div');
-      childrenWrap.className = 'children-wrap';
+      childrenWrap.className = 'children-wrap element-frame-children';
       for (const child of node.children) {
         childrenWrap.appendChild(renderNode(child, 0, nodes));
       }
-      row.appendChild(childrenWrap);
+      frame.appendChild(childrenWrap);
 
       const closing = document.createElement('div');
-      closing.className = 'node-card';
-      closing.style.marginTop = '4px';
+      closing.className = 'node-card element-frame-footer';
       const grip2 = document.createElement('div');
       grip2.className = 'grip';
       grip2.textContent = '⋮⋮';
@@ -758,9 +773,10 @@
       closingTag.textContent = `</${node.tag}>`;
       main2.appendChild(closingTag);
       closing.appendChild(main2);
-      row.appendChild(closing);
+      frame.appendChild(closing);
     }
 
+    row.appendChild(frame);
     return row;
   }
 
