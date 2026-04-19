@@ -80,6 +80,13 @@ The editor accepts documents with a free-form preamble followed by XML.
 
 The parser is custom and lightweight. It is built for prompt-style XML rather than strict general-purpose XML compatibility.
 
+Current parser/serializer behavior intentionally includes a few pragmatic rules:
+
+- common XML entities in imported text and attribute values are decoded into the in-memory document model
+- exported text and attribute values are escaped again so special characters remain valid XML
+- attribute names support common XML-style characters such as `.`, `-`, `_`, and `:`
+- tag rename validation uses a lightweight XML-name check to avoid exporting obviously invalid tag names
+
 ## Export Model
 
 The app supports two export modes:

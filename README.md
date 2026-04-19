@@ -17,6 +17,8 @@ The app runs entirely locally. Python serves the static files, and the browser h
 - add root, child, and sibling elements
 - reorder nodes with buttons or drag-and-drop
 - edit text nodes directly
+- escape XML special characters on export
+- support common XML-style attribute names such as `data-id` and `xml:lang`
 - preview raw XML output
 - export either AI-ready XML text or full editor format
 
@@ -83,4 +85,5 @@ More detail is available in `docs/ARCHITECTURE.md`.
 ## Notes
 
 - the XML parsing logic is custom and currently optimized for simple prompt-style XML
+- export escapes text and attribute values so characters like `&`, `<`, and `"` remain valid XML
 - the app is intentionally lightweight and has no front-end framework or backend service

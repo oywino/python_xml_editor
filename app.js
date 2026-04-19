@@ -23,6 +23,7 @@
 </prompt>`;
 
   let idCounter = 0;
+  const XML_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]*$/;
 
   const state = {
     doc: null,
@@ -42,14 +43,58 @@
     return `node_${idCounter}_${Math.random().toString(36).slice(2, 7)}`;
   }
 
-  function parseAttributes(attrStr) {
+  function isValidXmlName(name) {
+    return XML_NAME_RE.test(String(name || ''));
+  }
+
+  function decodeXmlEntities(text) {
+    return String(text || '').replace(/&(#x?[0-9a-fA-F]+|amp|lt|gt|quot|apos);/g, (match, entity) => {
+      if (entity === 'amp') return '&';
+      if (entity === 'lt') return '<';
+      if (entity === 'gt') return '>';
+      if (entity === 'quot') return '"';
+      if (entity === 'apos') return "'";
+      if (!entity.startsWith('#')) return match;
+
+      const isHex = entity[1]?.toLowerCase() === 'x';
+      const digits = isHex ? entity.slice(2) : entity.slice(1);
+      const codePoint = Number.parseInt(digits, isHex ? 16 : 10);
+      if (!Number.isFinite(codePoint)) return match;
+
+      try {
+        return String.fromCodePoint(codePoint);
+      } catch {
+        return match;
+      }
+    });
+  }
+
+  function escapeXmlText(text) {
+    return String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function escapeXmlAttribute(value) {
+    return escapeXmlText(value)
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  }
+
+  function parseLooseAttributes(attrStr, { decodeValues = false } = {}) {
     const attrs = {};
-    const regex = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+    const regex = /([A-Za-z_][A-Za-z0-9_.:-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'))?/g;
     let m;
     while ((m = regex.exec(attrStr)) !== null) {
-      attrs[m[1]] = m[2] ?? m[3] ?? '';
+      const rawValue = m[2] ?? m[3] ?? '';
+      attrs[m[1]] = decodeValues ? decodeXmlEntities(rawValue) : rawValue;
     }
     return attrs;
+  }
+
+  function parseAttributes(attrStr) {
+    return parseLooseAttributes(attrStr, { decodeValues: true });
   }
 
   function tokenize(xml) {
@@ -140,7 +185,7 @@
         const textNode = {
           id: generateId(),
           type: 'text',
-          text: token.text.trim(),
+          text: decodeXmlEntities(token.text.trim()),
           children: [],
         };
         if (stack.length > 0) {
@@ -178,18 +223,18 @@
     let result = '';
     for (const node of nodes) {
       if (node.type === 'text') {
-        const text = (node.text || '').trim();
+        const text = escapeXmlText((node.text || '').trim());
         if (text) result += `${pad}${text}\n`;
       } else {
         const attrs = node.attributes
-          ? Object.entries(node.attributes).map(([k, v]) => ` ${k}="${v}"`).join('')
+          ? Object.entries(node.attributes).map(([k, v]) => ` ${k}="${escapeXmlAttribute(v)}"`).join('')
           : '';
         if (node.children.length === 0) {
           result += `${pad}<${node.tag}${attrs} />\n`;
         } else {
           const hasOnlyText = node.children.length === 1 && node.children[0].type === 'text';
           if (hasOnlyText) {
-            const text = (node.children[0].text || '').trim();
+            const text = escapeXmlText((node.children[0].text || '').trim());
             result += `${pad}<${node.tag}${attrs}>${text}</${node.tag}>\n`;
           } else {
             result += `${pad}<${node.tag}${attrs}>\n`;
@@ -206,13 +251,13 @@
     let result = '';
     for (const node of nodes) {
       if (node.type === 'text') {
-        const text = (node.text || '').trim();
+        const text = escapeXmlText((node.text || '').trim());
         if (text) result += `${text}\n`;
       } else {
         const attrs = node.attributes
           ? Object.entries(node.attributes)
               .filter(([, v]) => v !== undefined)
-              .map(([k, v]) => ` ${k}="${v}"`).join('')
+              .map(([k, v]) => ` ${k}="${escapeXmlAttribute(v)}"`).join('')
           : '';
         if (node.children.length === 0) {
           result += `<${node.tag}${attrs} />\n`;
@@ -411,6 +456,10 @@
         render();
         return;
       }
+      if (!isValidXmlName(name)) {
+        showError('Use a valid XML name. Start with a letter or underscore, then use letters, numbers, ., -, _, or :.');
+        return;
+      }
       if (isDuplicate(name)) {
         showError(`"${name}" already exists among siblings.`);
         return;
@@ -421,7 +470,15 @@
 
     input.addEventListener('input', () => {
       const val = input.value.trim();
-      if (val && isDuplicate(val)) showError(`"${val}" already exists among siblings.`);
+      if (!val) {
+        clearError();
+        return;
+      }
+      if (!isValidXmlName(val)) {
+        showError('Use a valid XML name. Start with a letter or underscore, then use letters, numbers, ., -, _, or :.');
+        return;
+      }
+      if (isDuplicate(val)) showError(`"${val}" already exists among siblings.`);
       else clearError();
     });
     input.addEventListener('blur', save);
@@ -443,12 +500,7 @@
       : '';
 
     function save() {
-      const attrs = {};
-      const regex = /(\w+)(?:\s*=\s*"([^"]*)")?/g;
-      let m;
-      while ((m = regex.exec(input.value)) !== null) {
-        attrs[m[1]] = m[2] ?? '';
-      }
+      const attrs = parseLooseAttributes(input.value);
       updateRoot(updateNodeById(nodes, node.id, (n) => ({ ...n, attributes: attrs })));
     }
 
