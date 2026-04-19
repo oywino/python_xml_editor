@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.1.5';
+  const APP_VERSION = 'v0.1.6';
   const HEARTBEAT_INTERVAL_MS = 5000;
   let idCounter = 0;
   const XML_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]*$/;
@@ -624,17 +624,6 @@
       state.doc.root = updateNodeById(nodes, node.id, (n) => ({ ...n, text: textarea.value }));
     });
     wrap.appendChild(textarea);
-
-    const actions = document.createElement('div');
-    actions.className = 'text-actions';
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'action-btn red';
-    del.title = 'Delete text node';
-    del.appendChild(createTrashIcon());
-    del.addEventListener('click', () => updateRoot(removeNodeById(nodes, node.id)));
-    actions.appendChild(del);
-    wrap.appendChild(actions);
 
     row.appendChild(wrap);
     return row;

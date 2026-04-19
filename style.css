@@ -613,10 +613,6 @@ button {
   border-color: var(--border);
 }
 
-.text-actions {
-  padding-top: 6px;
-}
-
 .node-indent-1 { margin-left: 24px; }
 .node-indent-2 { margin-left: 48px; }
 .node-indent-3 { margin-left: 72px; }
