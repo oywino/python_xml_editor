@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.1.2';
+  const APP_VERSION = 'v0.1.3';
   const HEARTBEAT_INTERVAL_MS = 5000;
   let idCounter = 0;
   const XML_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]*$/;
