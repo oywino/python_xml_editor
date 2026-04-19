@@ -404,7 +404,6 @@ button {
   justify-content: center;
   width: 34px;
   align-self: stretch;
-  border-right: 1px solid var(--border-soft);
   color: #000;
   font-size: 14px;
   font-weight: 600;
@@ -579,7 +578,6 @@ button {
   margin-top: 4px;
   margin-left: 24px;
   padding: 4px 12px 4px 12px;
-  border-left: 2px solid var(--blue-100);
 }
 
 .text-row {

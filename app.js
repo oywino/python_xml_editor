@@ -22,8 +22,10 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.1.6';
+  const APP_VERSION = 'v0.1.7';
   const HEARTBEAT_INTERVAL_MS = 5000;
+  const HISTORY_LIMIT = 100;
+  const TYPING_COMMIT_DELAY_MS = 800;
   let idCounter = 0;
   const XML_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]*$/;
 
@@ -38,6 +40,9 @@
     showHelp: false,
     collapsed: {},
     dragNodeId: null,
+    historyPast: [],
+    historyFuture: [],
+    pendingHistory: null,
   };
 
   function generateId() {
@@ -380,15 +385,122 @@
     return result;
   }
 
-  function setDoc(doc) {
+  function cloneDoc(doc) {
+    return JSON.parse(JSON.stringify(doc));
+  }
+
+  function docsEqual(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  function loadDocIntoState(doc) {
     state.doc = doc;
     state.preambleVal = doc.preamble;
+  }
+
+  function pushHistorySnapshot(doc) {
+    state.historyPast.push(cloneDoc(doc));
+    if (state.historyPast.length > HISTORY_LIMIT) state.historyPast.shift();
+  }
+
+  function clearPendingHistoryTimer() {
+    if (state.pendingHistory?.timerId) {
+      window.clearTimeout(state.pendingHistory.timerId);
+    }
+  }
+
+  function schedulePendingHistoryCommit() {
+    if (!state.pendingHistory) return;
+    clearPendingHistoryTimer();
+    state.pendingHistory.timerId = window.setTimeout(() => {
+      commitPendingHistory();
+    }, TYPING_COMMIT_DELAY_MS);
+  }
+
+  function beginPendingHistorySession(key) {
+    if (!state.doc) return;
+    if (state.pendingHistory?.key === key) {
+      schedulePendingHistoryCommit();
+      return;
+    }
+
+    commitPendingHistory();
+    state.pendingHistory = {
+      key,
+      snapshot: cloneDoc(state.doc),
+      timerId: null,
+    };
+    schedulePendingHistoryCommit();
+  }
+
+  function commitPendingHistory() {
+    if (!state.pendingHistory) return;
+    clearPendingHistoryTimer();
+    const { snapshot } = state.pendingHistory;
+    state.pendingHistory = null;
+
+    if (!state.doc || docsEqual(snapshot, state.doc)) return;
+    pushHistorySnapshot(snapshot);
+    state.historyFuture = [];
+  }
+
+  function setDoc(doc, opts = {}) {
+    const { recordHistory = true } = opts;
+    commitPendingHistory();
+
+    if (state.doc && docsEqual(state.doc, doc)) return;
+    if (recordHistory && state.doc) {
+      pushHistorySnapshot(state.doc);
+      state.historyFuture = [];
+    }
+
+    loadDocIntoState(doc);
     render();
   }
 
   function updateRoot(root) {
-    state.doc = { ...state.doc, root };
+    setDoc({ ...state.doc, root });
+  }
+
+  function undo() {
+    commitPendingHistory();
+    if (state.historyPast.length === 0 || !state.doc) return;
+
+    state.historyFuture.push(cloneDoc(state.doc));
+    const previous = state.historyPast.pop();
+    loadDocIntoState(previous);
+    state.preambleEditing = false;
     render();
+  }
+
+  function redo() {
+    commitPendingHistory();
+    if (state.historyFuture.length === 0 || !state.doc) return;
+
+    pushHistorySnapshot(state.doc);
+    const next = state.historyFuture.pop();
+    loadDocIntoState(next);
+    state.preambleEditing = false;
+    render();
+  }
+
+  function isEditableTarget(target) {
+    return target instanceof HTMLElement
+      && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+  }
+
+  function handleGlobalKeydown(event) {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    if (isEditableTarget(event.target)) return;
+
+    const key = event.key.toLowerCase();
+    if (key === 'z' && !event.shiftKey) {
+      event.preventDefault();
+      undo();
+    } else if (key === 'y' || (key === 'z' && event.shiftKey)) {
+      event.preventDefault();
+      redo();
+    }
   }
 
   function getExportContent() {
@@ -620,9 +732,11 @@
     textarea.value = (node.text || '').trim();
     textarea.rows = Math.max(1, textarea.value ? textarea.value.split('\n').length : 1);
     textarea.addEventListener('input', () => {
+      beginPendingHistorySession(`text:${node.id}`);
       textarea.rows = Math.max(1, textarea.value ? textarea.value.split('\n').length : 1);
       state.doc.root = updateNodeById(nodes, node.id, (n) => ({ ...n, text: textarea.value }));
     });
+    textarea.addEventListener('blur', () => commitPendingHistory());
     wrap.appendChild(textarea);
 
     row.appendChild(wrap);
@@ -904,9 +1018,9 @@
       className: 'btn',
       onClick: () => {
         if (!window.confirm('Start a new document? Unsaved changes will be lost.')) return;
-        setDoc(parseDocument('# New Prompt\n\n<prompt>\n  \n</prompt>'));
         state.showRaw = false;
         state.preambleEditing = false;
+        setDoc(parseDocument('# New Prompt\n\n<prompt>\n  \n</prompt>'));
       },
     });
     toolbar.appendChild(newBtn);
@@ -922,9 +1036,9 @@
       const reader = new FileReader();
       reader.onload = (ev) => {
         const text = String(ev.target?.result || '');
-        setDoc(parseDocument(text));
         state.showRaw = false;
         state.preambleEditing = false;
+        setDoc(parseDocument(text));
       };
       reader.readAsText(file);
       input.value = '';
@@ -984,6 +1098,7 @@
       ['+↓ button', 'add sibling below'],
       ['Trash icon', 'delete element'],
       ['Text area', 'edit text content'],
+      ['Ctrl+Z / Ctrl+Y', 'undo or redo document changes'],
     ];
     for (const [strong, rest] of items) {
       const div = document.createElement('div');
@@ -1035,9 +1150,8 @@
         save.className = 'mini-btn mini-btn-primary';
         save.textContent = 'Save';
         save.addEventListener('click', () => {
-          state.doc = { ...state.doc, preamble: state.preambleVal };
           state.preambleEditing = false;
-          render();
+          setDoc({ ...state.doc, preamble: state.preambleVal });
         });
         actions.appendChild(save);
         const cancel = document.createElement('button');
@@ -1298,8 +1412,11 @@
   }
 
   function init() {
-    state.doc = parseDocument(SAMPLE_DOC);
-    state.preambleVal = state.doc.preamble;
+    state.historyPast = [];
+    state.historyFuture = [];
+    state.pendingHistory = null;
+    loadDocIntoState(parseDocument(SAMPLE_DOC));
+    window.addEventListener('keydown', handleGlobalKeydown);
     startHeartbeat();
     render();
   }
