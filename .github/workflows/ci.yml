@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - chore/**
+      - feature/**
+      - fix/**
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile Python launcher
+        run: python -m py_compile app.py
+
+      - name: Verify required app files exist
+        run: |
+          test -f app.js
+          test -f index.html
+          test -f style.css
+
+      - name: Verify browser entrypoint references assets
+        run: |
+          grep -q 'style.css' index.html
+          grep -q 'app.js' index.html
