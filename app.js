@@ -22,6 +22,7 @@
   </response_format>
 </prompt>`;
 
+  const APP_VERSION = 'v0.1.1';
   let idCounter = 0;
   const XML_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]*$/;
 
@@ -789,10 +790,20 @@
     iconBox.className = 'brand-icon';
     iconBox.textContent = '</>';
     brand.appendChild(iconBox);
+
+    const brandText = document.createElement('div');
+    brandText.className = 'brand-text';
     const title = document.createElement('div');
     title.className = 'brand-title';
     title.textContent = 'XML Prompt Editor';
-    brand.appendChild(title);
+    brandText.appendChild(title);
+
+    const version = document.createElement('div');
+    version.className = 'brand-version';
+    version.textContent = APP_VERSION;
+    brandText.appendChild(version);
+
+    brand.appendChild(brandText);
     inner.appendChild(brand);
 
     const spacer = document.createElement('div');

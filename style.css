@@ -88,6 +88,13 @@ button {
   gap: 10px;
 }
 
+.brand-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .brand-icon {
   width: 28px;
   height: 28px;
@@ -104,6 +111,18 @@ button {
   font-size: 14px;
   font-weight: 600;
   color: #1e293b;
+}
+
+.brand-version {
+  border: 1px solid var(--blue-200);
+  border-radius: 999px;
+  background: var(--blue-50);
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 5px 8px;
 }
 
 .spacer {
