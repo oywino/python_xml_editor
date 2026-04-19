@@ -1,0 +1,1144 @@
+(() => {
+  const SAMPLE_DOC = `# My AI Prompt
+
+<prompt>
+  <context>
+    <project_name>
+      My Amazing Project
+    </project_name>
+    <goal>
+      Describe your project goal here. What are you building?
+    </goal>
+  </context>
+
+  <instructions>
+    <rule>Always provide step-by-step reasoning.</rule>
+    <rule>Ask for clarification when requirements are unclear.</rule>
+    <rule>Never speculate beyond the provided context.</rule>
+  </instructions>
+
+  <response_format>
+    Please respond in a structured, clear manner.
+  </response_format>
+</prompt>`;
+
+  let idCounter = 0;
+
+  const state = {
+    doc: null,
+    showExport: false,
+    exportMode: 'ai',
+    copied: false,
+    showRaw: false,
+    preambleEditing: false,
+    preambleVal: '',
+    showHelp: false,
+    collapsed: {},
+    dragNodeId: null,
+  };
+
+  function generateId() {
+    idCounter += 1;
+    return `node_${idCounter}_${Math.random().toString(36).slice(2, 7)}`;
+  }
+
+  function parseAttributes(attrStr) {
+    const attrs = {};
+    const regex = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+    let m;
+    while ((m = regex.exec(attrStr)) !== null) {
+      attrs[m[1]] = m[2] ?? m[3] ?? '';
+    }
+    return attrs;
+  }
+
+  function tokenize(xml) {
+    const tokens = [];
+    let i = 0;
+    while (i < xml.length) {
+      if (xml[i] === '<') {
+        const end = xml.indexOf('>', i);
+        if (end === -1) {
+          tokens.push({ type: 'text', text: xml.slice(i) });
+          break;
+        }
+        const tagContent = xml.slice(i + 1, end);
+
+        if (tagContent.startsWith('!--')) {
+          const commentEnd = xml.indexOf('-->', i);
+          if (commentEnd === -1) {
+            i = xml.length;
+          } else {
+            i = commentEnd + 3;
+          }
+          continue;
+        }
+
+        if (tagContent.startsWith('/')) {
+          tokens.push({ type: 'close', tag: tagContent.slice(1).trim() });
+          i = end + 1;
+        } else if (tagContent.endsWith('/')) {
+          const inner = tagContent.slice(0, -1).trim();
+          const spaceIdx = inner.search(/\s/);
+          const tag = spaceIdx === -1 ? inner : inner.slice(0, spaceIdx);
+          const attrStr = spaceIdx === -1 ? '' : inner.slice(spaceIdx);
+          tokens.push({ type: 'selfclose', tag, attributes: parseAttributes(attrStr) });
+          i = end + 1;
+        } else {
+          const spaceIdx = tagContent.search(/\s/);
+          const tag = spaceIdx === -1 ? tagContent : tagContent.slice(0, spaceIdx);
+          const attrStr = spaceIdx === -1 ? '' : tagContent.slice(spaceIdx);
+          tokens.push({ type: 'open', tag, attributes: parseAttributes(attrStr) });
+          i = end + 1;
+        }
+      } else {
+        const nextTag = xml.indexOf('<', i);
+        const text = nextTag === -1 ? xml.slice(i) : xml.slice(i, nextTag);
+        if (text.trim()) tokens.push({ type: 'text', text });
+        i = nextTag === -1 ? xml.length : nextTag;
+      }
+    }
+    return tokens;
+  }
+
+  function buildTree(tokens) {
+    const stack = [];
+    const roots = [];
+    for (const token of tokens) {
+      if (token.type === 'open') {
+        const node = {
+          id: generateId(),
+          type: 'element',
+          tag: token.tag,
+          attributes: token.attributes || {},
+          children: [],
+        };
+        if (stack.length > 0) {
+          node.parent = stack[stack.length - 1].id;
+          stack[stack.length - 1].children.push(node);
+        } else {
+          roots.push(node);
+        }
+        stack.push(node);
+      } else if (token.type === 'close') {
+        if (stack.length > 0) stack.pop();
+      } else if (token.type === 'selfclose') {
+        const node = {
+          id: generateId(),
+          type: 'element',
+          tag: token.tag,
+          attributes: token.attributes || {},
+          children: [],
+        };
+        if (stack.length > 0) {
+          node.parent = stack[stack.length - 1].id;
+          stack[stack.length - 1].children.push(node);
+        } else {
+          roots.push(node);
+        }
+      } else if (token.type === 'text') {
+        const textNode = {
+          id: generateId(),
+          type: 'text',
+          text: token.text.trim(),
+          children: [],
+        };
+        if (stack.length > 0) {
+          textNode.parent = stack[stack.length - 1].id;
+          stack[stack.length - 1].children.push(textNode);
+        } else {
+          roots.push(textNode);
+        }
+      }
+    }
+    return roots;
+  }
+
+  function parseDocument(input) {
+    const lines = input.split('\n');
+    let preamble = '';
+    let xmlStart = -1;
+    for (let i = 0; i < lines.length; i += 1) {
+      const trimmed = lines[i].trim();
+      if (trimmed.startsWith('<') && !trimmed.startsWith('<!')) {
+        xmlStart = i;
+        break;
+      }
+      preamble += (preamble ? '\n' : '') + lines[i];
+    }
+    if (xmlStart === -1) {
+      return { preamble: input, root: [] };
+    }
+    const xmlText = lines.slice(xmlStart).join('\n');
+    return { preamble, root: buildTree(tokenize(xmlText)) };
+  }
+
+  function serializeToXml(nodes, indent = 0) {
+    const pad = '  '.repeat(indent);
+    let result = '';
+    for (const node of nodes) {
+      if (node.type === 'text') {
+        const text = (node.text || '').trim();
+        if (text) result += `${pad}${text}\n`;
+      } else {
+        const attrs = node.attributes
+          ? Object.entries(node.attributes).map(([k, v]) => ` ${k}="${v}"`).join('')
+          : '';
+        if (node.children.length === 0) {
+          result += `${pad}<${node.tag}${attrs} />\n`;
+        } else {
+          const hasOnlyText = node.children.length === 1 && node.children[0].type === 'text';
+          if (hasOnlyText) {
+            const text = (node.children[0].text || '').trim();
+            result += `${pad}<${node.tag}${attrs}>${text}</${node.tag}>\n`;
+          } else {
+            result += `${pad}<${node.tag}${attrs}>\n`;
+            result += serializeToXml(node.children, indent + 1);
+            result += `${pad}</${node.tag}>\n`;
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  function serializeFlatXml(nodes) {
+    let result = '';
+    for (const node of nodes) {
+      if (node.type === 'text') {
+        const text = (node.text || '').trim();
+        if (text) result += `${text}\n`;
+      } else {
+        const attrs = node.attributes
+          ? Object.entries(node.attributes)
+              .filter(([, v]) => v !== undefined)
+              .map(([k, v]) => ` ${k}="${v}"`).join('')
+          : '';
+        if (node.children.length === 0) {
+          result += `<${node.tag}${attrs} />\n`;
+        } else {
+          result += `<${node.tag}${attrs}>\n`;
+          result += serializeFlatXml(node.children);
+          result += `</${node.tag}>\n`;
+        }
+      }
+    }
+    return result;
+  }
+
+  function serializeDocument(doc) {
+    let result = '';
+    if (doc.preamble) result += `${doc.preamble}\n\n`;
+    result += serializeToXml(doc.root, 0);
+    return result.replace(/\n+$/, '');
+  }
+
+  function serializeDocumentFlat(doc) {
+    return serializeFlatXml(doc.root).replace(/\n+$/, '');
+  }
+
+  function serializeDocumentForAI(doc) {
+    return serializeDocumentFlat(doc);
+  }
+
+  function removeNodeById(nodes, id) {
+    return nodes.filter((n) => n.id !== id).map((n) => ({ ...n, children: removeNodeById(n.children, id) }));
+  }
+
+  function updateNodeById(nodes, id, updater) {
+    return nodes.map((n) => {
+      if (n.id === id) return updater(n);
+      return { ...n, children: updateNodeById(n.children, id, updater) };
+    });
+  }
+
+  function createElementNode(tag, parentId) {
+    return {
+      id: generateId(),
+      type: 'element',
+      tag,
+      attributes: {},
+      children: [{ id: generateId(), type: 'text', text: '', children: [], parent: undefined }],
+      parent: parentId,
+    };
+  }
+
+  function findNodeById(nodes, id) {
+    for (const node of nodes) {
+      if (node.id === id) return node;
+      const found = findNodeById(node.children, id);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function getNodeChildrenSiblings(nodes, nodeId) {
+    function find(list, parentId) {
+      for (const n of list) {
+        if (n.id === nodeId) return { siblings: list, parentId };
+        const found = find(n.children, n.id);
+        if (found) return found;
+      }
+      return null;
+    }
+    return find(nodes, null) || { siblings: nodes, parentId: null };
+  }
+
+  function siblingElementTags(siblings, excludeId) {
+    return new Set(
+      siblings
+        .filter((n) => n.type === 'element' && n.id !== excludeId && n.tag)
+        .map((n) => n.tag)
+    );
+  }
+
+  function uniqueTagName(base, usedNames) {
+    if (!usedNames.has(base)) return base;
+    let i = 2;
+    while (usedNames.has(`${base}_${i}`)) i += 1;
+    return `${base}_${i}`;
+  }
+
+  function isDescendant(node, maybeAncestorId) {
+    if (!node || !maybeAncestorId) return false;
+    if (node.id === maybeAncestorId) return true;
+    return node.children.some((child) => isDescendant(child, maybeAncestorId));
+  }
+
+  function insertNodeAt(nodes, node, parentId, index) {
+    if (parentId === null) {
+      const arr = [...nodes];
+      arr.splice(index, 0, node);
+      return arr;
+    }
+    return nodes.map((n) => {
+      if (n.id === parentId) {
+        const children = [...n.children];
+        children.splice(index, 0, { ...node, parent: parentId });
+        return { ...n, children };
+      }
+      return { ...n, children: insertNodeAt(n.children, node, parentId, index) };
+    });
+  }
+
+  function moveNode(nodes, nodeId, target) {
+    const entry = findNodeById(nodes, nodeId);
+    if (!entry) return nodes;
+    const targetParent = target.parentId ? findNodeById(nodes, target.parentId) : null;
+    if (targetParent && isDescendant(entry, target.parentId)) return nodes;
+    const movedNode = JSON.parse(JSON.stringify(entry));
+    movedNode.parent = target.parentId || undefined;
+    let result = removeNodeById(nodes, nodeId);
+    result = insertNodeAt(result, movedNode, target.parentId, target.index);
+    return result;
+  }
+
+  function setDoc(doc) {
+    state.doc = doc;
+    state.preambleVal = doc.preamble;
+    render();
+  }
+
+  function updateRoot(root) {
+    state.doc = { ...state.doc, root };
+    render();
+  }
+
+  function getExportContent() {
+    return state.exportMode === 'ai' ? serializeDocumentForAI(state.doc) : serializeDocument(state.doc);
+  }
+
+  function escapeHtml(text) {
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function icon(text) {
+    const span = document.createElement('span');
+    span.textContent = text;
+    return span;
+  }
+
+  function btn(label, opts = {}) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = opts.className || 'btn';
+    b.textContent = label;
+    if (opts.title) b.title = opts.title;
+    if (opts.onClick) b.addEventListener('click', opts.onClick);
+    return b;
+  }
+
+  function renderTagEditor(node, nodes, container) {
+    const wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.style.flexDirection = 'column';
+    wrap.style.gap = '4px';
+
+    const input = document.createElement('input');
+    input.className = 'inline-input';
+    input.value = node.tag || '';
+    wrap.appendChild(input);
+
+    const errorLine = document.createElement('div');
+    errorLine.className = 'error-line hidden';
+    wrap.appendChild(errorLine);
+
+    function isDuplicate(name) {
+      const { siblings } = getNodeChildrenSiblings(nodes, node.id);
+      return siblingElementTags(siblings, node.id).has(name);
+    }
+
+    function showError(message) {
+      input.classList.add('error');
+      errorLine.textContent = `⚠ ${message}`;
+      errorLine.classList.remove('hidden');
+      container.closest('.node-card')?.classList.add('error');
+    }
+
+    function clearError() {
+      input.classList.remove('error');
+      errorLine.classList.add('hidden');
+      container.closest('.node-card')?.classList.remove('error');
+    }
+
+    function save() {
+      const name = input.value.trim();
+      if (!name) {
+        render();
+        return;
+      }
+      if (isDuplicate(name)) {
+        showError(`"${name}" already exists among siblings.`);
+        return;
+      }
+      clearError();
+      updateRoot(updateNodeById(nodes, node.id, (n) => ({ ...n, tag: name })));
+    }
+
+    input.addEventListener('input', () => {
+      const val = input.value.trim();
+      if (val && isDuplicate(val)) showError(`"${val}" already exists among siblings.`);
+      else clearError();
+    });
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') save();
+      if (e.key === 'Escape') render();
+    });
+
+    container.replaceChildren(wrap);
+    input.focus();
+    input.select();
+  }
+
+  function renderAttrEditor(node, nodes, container) {
+    const input = document.createElement('input');
+    input.className = 'attr-input';
+    input.value = node.attributes
+      ? Object.entries(node.attributes).map(([k, v]) => (v ? `${k}="${v}"` : k)).join(' ')
+      : '';
+
+    function save() {
+      const attrs = {};
+      const regex = /(\w+)(?:\s*=\s*"([^"]*)")?/g;
+      let m;
+      while ((m = regex.exec(input.value)) !== null) {
+        attrs[m[1]] = m[2] ?? '';
+      }
+      updateRoot(updateNodeById(nodes, node.id, (n) => ({ ...n, attributes: attrs })));
+    }
+
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') save();
+      if (e.key === 'Escape') render();
+    });
+
+    container.replaceChildren(input);
+    input.focus();
+    input.select();
+  }
+
+  function renderTextNode(node, depth, nodes) {
+    const row = document.createElement('div');
+    row.className = `node-row node-indent-${Math.min(depth, 10)}`;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'text-row';
+
+    const iconEl = document.createElement('div');
+    iconEl.className = 'text-icon';
+    iconEl.textContent = '▤';
+    wrap.appendChild(iconEl);
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'text-node-textarea';
+    textarea.placeholder = 'Text content...';
+    textarea.value = (node.text || '').trim();
+    textarea.rows = Math.max(1, textarea.value ? textarea.value.split('\n').length : 1);
+    textarea.addEventListener('input', () => {
+      textarea.rows = Math.max(1, textarea.value ? textarea.value.split('\n').length : 1);
+      state.doc.root = updateNodeById(nodes, node.id, (n) => ({ ...n, text: textarea.value }));
+    });
+    wrap.appendChild(textarea);
+
+    const actions = document.createElement('div');
+    actions.className = 'text-actions';
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'action-btn red';
+    del.title = 'Delete text node';
+    del.textContent = '🗑';
+    del.addEventListener('click', () => updateRoot(removeNodeById(nodes, node.id)));
+    actions.appendChild(del);
+    wrap.appendChild(actions);
+
+    row.appendChild(wrap);
+    return row;
+  }
+
+  function renderElementNode(node, depth, nodes) {
+    const row = document.createElement('div');
+    row.className = `node-row node-indent-${Math.min(depth, 10)}`;
+
+    const card = document.createElement('div');
+    card.className = 'node-card';
+    card.draggable = true;
+    card.addEventListener('dragstart', (e) => {
+      state.dragNodeId = node.id;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', node.id);
+    });
+    card.addEventListener('dragend', () => {
+      state.dragNodeId = null;
+      card.classList.remove('dragging');
+      document.querySelectorAll('.drag-over').forEach((el) => el.classList.remove('drag-over'));
+    });
+    card.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (!state.dragNodeId || state.dragNodeId === node.id) return;
+      card.classList.add('drag-over');
+    });
+    card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
+    card.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      card.classList.remove('drag-over');
+      const dragged = e.dataTransfer.getData('text/plain');
+      if (dragged && dragged !== node.id) {
+        updateRoot(moveNode(nodes, dragged, { parentId: node.id, index: node.children.length }));
+      }
+    });
+
+    const grip = document.createElement('div');
+    grip.className = 'grip';
+    grip.textContent = '⋮⋮';
+    card.appendChild(grip);
+
+    const expand = document.createElement('button');
+    expand.type = 'button';
+    expand.className = 'expand-btn';
+    const hasChildren = node.children.length > 0;
+    expand.textContent = hasChildren ? (state.collapsed[node.id] ? '▸' : '▾') : '';
+    expand.title = state.collapsed[node.id] ? 'Expand' : 'Collapse';
+    expand.addEventListener('click', () => {
+      state.collapsed[node.id] = !state.collapsed[node.id];
+      render();
+    });
+    card.appendChild(expand);
+
+    const main = document.createElement('div');
+    main.className = 'node-main';
+
+    const tagSymbol = document.createElement('span');
+    tagSymbol.className = 'tag-symbol';
+    tagSymbol.textContent = '🏷';
+    main.appendChild(tagSymbol);
+
+    const tagWrap = document.createElement('div');
+    const tagBtn = document.createElement('button');
+    tagBtn.type = 'button';
+    tagBtn.className = 'tag-pill';
+    tagBtn.textContent = `<${node.tag}>`;
+    tagBtn.addEventListener('click', () => renderTagEditor(node, nodes, tagWrap));
+    tagWrap.appendChild(tagBtn);
+    main.appendChild(tagWrap);
+
+    const attrWrap = document.createElement('div');
+    const attrDisplay = node.attributes
+      ? Object.entries(node.attributes)
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => (v ? `${k}="${v}"` : k))
+          .join(' ')
+      : '';
+
+    if (attrDisplay) {
+      const attrBtn = document.createElement('button');
+      attrBtn.type = 'button';
+      attrBtn.className = 'attr-pill';
+      attrBtn.textContent = attrDisplay;
+      attrBtn.addEventListener('click', () => renderAttrEditor(node, nodes, attrWrap));
+      attrWrap.appendChild(attrBtn);
+    } else {
+      const attrBtn = document.createElement('button');
+      attrBtn.type = 'button';
+      attrBtn.className = 'attr-pill attr-placeholder';
+      attrBtn.textContent = '+ attr';
+      attrBtn.addEventListener('click', () => renderAttrEditor(node, nodes, attrWrap));
+      attrWrap.appendChild(attrBtn);
+    }
+    main.appendChild(attrWrap);
+    card.appendChild(main);
+
+    const actions = document.createElement('div');
+    actions.className = 'node-actions';
+
+    const moveUpBtn = document.createElement('button');
+    moveUpBtn.type = 'button';
+    moveUpBtn.className = 'action-btn';
+    moveUpBtn.title = 'Move up';
+    moveUpBtn.textContent = '▲';
+    moveUpBtn.addEventListener('click', () => {
+      const { siblings, parentId } = getNodeChildrenSiblings(nodes, node.id);
+      const idx = siblings.findIndex((n) => n.id === node.id);
+      if (idx <= 0) return;
+      const arr = [...siblings];
+      [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
+      if (parentId === null) updateRoot(arr);
+      else updateRoot(updateNodeById(nodes, parentId, (n) => ({ ...n, children: arr })));
+    });
+    actions.appendChild(moveUpBtn);
+
+    const moveDownBtn = document.createElement('button');
+    moveDownBtn.type = 'button';
+    moveDownBtn.className = 'action-btn';
+    moveDownBtn.title = 'Move down';
+    moveDownBtn.textContent = '▼';
+    moveDownBtn.addEventListener('click', () => {
+      const { siblings, parentId } = getNodeChildrenSiblings(nodes, node.id);
+      const idx = siblings.findIndex((n) => n.id === node.id);
+      if (idx >= siblings.length - 1) return;
+      const arr = [...siblings];
+      [arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]];
+      if (parentId === null) updateRoot(arr);
+      else updateRoot(updateNodeById(nodes, parentId, (n) => ({ ...n, children: arr })));
+    });
+    actions.appendChild(moveDownBtn);
+
+    const addChildBtn = document.createElement('button');
+    addChildBtn.type = 'button';
+    addChildBtn.className = 'action-btn green';
+    addChildBtn.title = 'Add child element';
+    addChildBtn.textContent = '+';
+    addChildBtn.addEventListener('click', () => {
+      const existing = new Set(node.children.filter((c) => c.type === 'element').map((c) => c.tag));
+      const name = uniqueTagName('new_tag', existing);
+      const child = createElementNode(name, node.id);
+      state.collapsed[node.id] = false;
+      updateRoot(updateNodeById(nodes, node.id, (n) => ({ ...n, children: [...n.children, child] })));
+    });
+    actions.appendChild(addChildBtn);
+
+    const addSiblingBtn = document.createElement('button');
+    addSiblingBtn.type = 'button';
+    addSiblingBtn.className = 'action-btn blue';
+    addSiblingBtn.title = 'Add sibling after';
+    addSiblingBtn.textContent = '+↓';
+    addSiblingBtn.addEventListener('click', () => {
+      const { siblings, parentId } = getNodeChildrenSiblings(nodes, node.id);
+      const idx = siblings.findIndex((n) => n.id === node.id);
+      const used = siblingElementTags(siblings, '');
+      const name = uniqueTagName('new_tag', used);
+      const newNode = createElementNode(name, parentId || undefined);
+      const newSiblings = [...siblings];
+      newSiblings.splice(idx + 1, 0, newNode);
+      if (parentId === null) updateRoot(newSiblings);
+      else updateRoot(updateNodeById(nodes, parentId, (n) => ({ ...n, children: newSiblings })));
+    });
+    actions.appendChild(addSiblingBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'action-btn red';
+    deleteBtn.title = 'Delete';
+    deleteBtn.textContent = '🗑';
+    deleteBtn.addEventListener('click', () => updateRoot(removeNodeById(nodes, node.id)));
+    actions.appendChild(deleteBtn);
+
+    card.appendChild(actions);
+    row.appendChild(card);
+
+    const isCollapsed = !!state.collapsed[node.id];
+    if (!isCollapsed && hasChildren) {
+      const childrenWrap = document.createElement('div');
+      childrenWrap.className = 'children-wrap';
+      for (const child of node.children) {
+        childrenWrap.appendChild(renderNode(child, 0, nodes));
+      }
+      row.appendChild(childrenWrap);
+
+      const closing = document.createElement('div');
+      closing.className = 'node-card';
+      closing.style.marginTop = '4px';
+      const grip2 = document.createElement('div');
+      grip2.className = 'grip';
+      grip2.textContent = '⋮⋮';
+      closing.appendChild(grip2);
+      const spacer = document.createElement('div');
+      spacer.style.width = '28px';
+      spacer.style.marginLeft = '4px';
+      closing.appendChild(spacer);
+      const main2 = document.createElement('div');
+      main2.className = 'node-main';
+      const tagSymbol2 = document.createElement('span');
+      tagSymbol2.className = 'tag-symbol';
+      tagSymbol2.textContent = '🏷';
+      main2.appendChild(tagSymbol2);
+      const closingTag = document.createElement('span');
+      closingTag.className = 'tag-pill-closing';
+      closingTag.textContent = `</${node.tag}>`;
+      main2.appendChild(closingTag);
+      closing.appendChild(main2);
+      row.appendChild(closing);
+    }
+
+    return row;
+  }
+
+  function renderNode(node, depth, nodes) {
+    if (node.type === 'text') return renderTextNode(node, depth, nodes);
+    return renderElementNode(node, depth, nodes);
+  }
+
+  function downloadText(filename, content) {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function renderHeader(root) {
+    const topbar = document.createElement('header');
+    topbar.className = 'topbar';
+    const inner = document.createElement('div');
+    inner.className = 'topbar-inner';
+
+    const brand = document.createElement('div');
+    brand.className = 'brand';
+    const iconBox = document.createElement('div');
+    iconBox.className = 'brand-icon';
+    iconBox.textContent = '</>';
+    brand.appendChild(iconBox);
+    const title = document.createElement('div');
+    title.className = 'brand-title';
+    title.textContent = 'XML Prompt Editor';
+    brand.appendChild(title);
+    inner.appendChild(brand);
+
+    const spacer = document.createElement('div');
+    spacer.className = 'spacer';
+    inner.appendChild(spacer);
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'toolbar';
+
+    const newBtn = btn('＋ New', {
+      className: 'btn',
+      onClick: () => {
+        if (!window.confirm('Start a new document? Unsaved changes will be lost.')) return;
+        setDoc(parseDocument('# New Prompt\n\n<prompt>\n  \n</prompt>'));
+        state.showRaw = false;
+        state.preambleEditing = false;
+      },
+    });
+    toolbar.appendChild(newBtn);
+
+    const openBtn = btn('⤴ Open File', { className: 'btn' });
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.md,.txt,.xml';
+    input.className = 'hidden';
+    input.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = String(ev.target?.result || '');
+        setDoc(parseDocument(text));
+        state.showRaw = false;
+        state.preambleEditing = false;
+      };
+      reader.readAsText(file);
+      input.value = '';
+    });
+    openBtn.addEventListener('click', () => input.click());
+    toolbar.appendChild(openBtn);
+    toolbar.appendChild(input);
+
+    const rawBtn = btn(state.showRaw ? '👁 Visual' : '📄 Raw', {
+      className: `btn ${state.showRaw ? 'btn-toggle-active' : ''}`,
+      onClick: () => {
+        state.showRaw = !state.showRaw;
+        render();
+      },
+    });
+    toolbar.appendChild(rawBtn);
+
+    const helpBtn = btn('?', {
+      className: 'btn btn-icon',
+      title: 'Help',
+      onClick: () => {
+        state.showHelp = !state.showHelp;
+        render();
+      },
+    });
+    toolbar.appendChild(helpBtn);
+
+    const exportBtn = btn('⤓ Export', {
+      className: 'btn btn-primary',
+      onClick: () => {
+        state.showExport = true;
+        state.copied = false;
+        render();
+      },
+    });
+    toolbar.appendChild(exportBtn);
+
+    inner.appendChild(toolbar);
+    topbar.appendChild(inner);
+    root.appendChild(topbar);
+  }
+
+  function renderHelp(root) {
+    if (!state.showHelp) return;
+    const help = document.createElement('div');
+    help.className = 'help-panel';
+    const inner = document.createElement('div');
+    inner.className = 'help-inner';
+    const grid = document.createElement('div');
+    grid.className = 'help-grid';
+    const items = [
+      ['Click tag name', 'rename it'],
+      ['Click attr text', 'edit attributes'],
+      ['Drag grip', 'move elements into another node'],
+      ['▲▼ arrows', 'reorder siblings'],
+      ['+ button', 'add child element'],
+      ['+↓ button', 'add sibling below'],
+      ['Trash icon', 'delete element'],
+      ['Text area', 'edit text content'],
+    ];
+    for (const [strong, rest] of items) {
+      const div = document.createElement('div');
+      div.innerHTML = `<strong>${escapeHtml(strong)}</strong> — ${escapeHtml(rest)}`;
+      grid.appendChild(div);
+    }
+    inner.appendChild(grid);
+    help.appendChild(inner);
+    root.appendChild(help);
+  }
+
+  function renderPreambleCard(container) {
+    if (state.doc.preamble || state.preambleEditing) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      const header = document.createElement('div');
+      header.className = 'card-header';
+      const title = document.createElement('div');
+      title.className = 'card-title';
+      title.textContent = 'PREAMBLE (MARKDOWN HEADER)';
+      header.appendChild(title);
+      if (!state.preambleEditing) {
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'edit-link';
+        edit.textContent = 'Edit';
+        edit.addEventListener('click', () => {
+          state.preambleEditing = true;
+          render();
+        });
+        header.appendChild(edit);
+      }
+      card.appendChild(header);
+
+      if (state.preambleEditing) {
+        const body = document.createElement('div');
+        body.className = 'card-body';
+        const textarea = document.createElement('textarea');
+        textarea.className = 'preamble-textarea';
+        textarea.value = state.preambleVal;
+        textarea.addEventListener('input', () => {
+          state.preambleVal = textarea.value;
+        });
+        body.appendChild(textarea);
+        const actions = document.createElement('div');
+        actions.className = 'action-row';
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.className = 'mini-btn mini-btn-primary';
+        save.textContent = 'Save';
+        save.addEventListener('click', () => {
+          state.doc = { ...state.doc, preamble: state.preambleVal };
+          state.preambleEditing = false;
+          render();
+        });
+        actions.appendChild(save);
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'mini-btn mini-btn-muted';
+        cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', () => {
+          state.preambleVal = state.doc.preamble;
+          state.preambleEditing = false;
+          render();
+        });
+        actions.appendChild(cancel);
+        body.appendChild(actions);
+        card.appendChild(body);
+      } else {
+        const display = document.createElement('div');
+        display.className = 'preamble-display';
+        display.textContent = state.doc.preamble || 'No preamble';
+        if (!state.doc.preamble) display.classList.add('muted-empty');
+        display.addEventListener('click', () => {
+          state.preambleEditing = true;
+          render();
+        });
+        card.appendChild(display);
+      }
+      container.appendChild(card);
+    } else {
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'add-preamble';
+      add.textContent = '+ Add preamble (e.g. Markdown title or comment)';
+      add.addEventListener('click', () => {
+        state.preambleEditing = true;
+        render();
+      });
+      container.appendChild(add);
+    }
+  }
+
+  function renderStructureCard(container) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const header = document.createElement('div');
+    header.className = 'card-header';
+    const iconEl = document.createElement('span');
+    iconEl.textContent = '</>';
+    iconEl.style.color = '#94a3b8';
+    iconEl.style.fontSize = '13px';
+    header.appendChild(iconEl);
+    const title = document.createElement('div');
+    title.className = 'card-title';
+    title.textContent = 'XML Structure';
+    header.appendChild(title);
+    const subtle = document.createElement('div');
+    subtle.className = 'card-subtle';
+    subtle.textContent = `${state.doc.root.length} root element${state.doc.root.length !== 1 ? 's' : ''}`;
+    header.appendChild(subtle);
+    card.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'structure-body';
+    const list = document.createElement('div');
+    list.className = 'node-list';
+    for (const node of state.doc.root) {
+      list.appendChild(renderNode(node, 0, state.doc.root));
+    }
+    body.appendChild(list);
+
+    const addWrap = document.createElement('div');
+    addWrap.className = 'add-root-wrap';
+    const addRoot = document.createElement('button');
+    addRoot.type = 'button';
+    addRoot.className = 'add-root-btn';
+    addRoot.textContent = '+ Add root element';
+    addRoot.addEventListener('click', () => {
+      const used = new Set(state.doc.root.filter((n) => n.type === 'element').map((n) => n.tag));
+      const name = uniqueTagName('new_tag', used);
+      updateRoot([...state.doc.root, createElementNode(name)]);
+    });
+    addWrap.appendChild(addRoot);
+    body.appendChild(addWrap);
+    card.appendChild(body);
+    container.appendChild(card);
+  }
+
+  function renderRawCard(container) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const header = document.createElement('div');
+    header.className = 'card-header';
+    const iconEl = document.createElement('span');
+    iconEl.textContent = '📄';
+    iconEl.style.fontSize = '13px';
+    header.appendChild(iconEl);
+    const title = document.createElement('div');
+    title.className = 'card-title';
+    title.textContent = 'Raw text preview';
+    header.appendChild(title);
+    const subtle = document.createElement('div');
+    subtle.className = 'card-subtle';
+    subtle.textContent = 'Read-only — switch to Visual to edit';
+    header.appendChild(subtle);
+    card.appendChild(header);
+
+    const pre = document.createElement('pre');
+    pre.className = 'raw-pre';
+    pre.textContent = serializeDocumentFlat(state.doc);
+    card.appendChild(pre);
+    container.appendChild(card);
+  }
+
+  function renderExportModal(root) {
+    if (!state.showExport) return;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) {
+        state.showExport = false;
+        render();
+      }
+    });
+
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+
+    const header = document.createElement('div');
+    header.className = 'modal-header';
+    const left = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'modal-title';
+    title.textContent = 'Export Prompt';
+    left.appendChild(title);
+    const subtitle = document.createElement('div');
+    subtitle.className = 'modal-subtitle';
+    subtitle.textContent = 'Choose export format below';
+    left.appendChild(subtitle);
+    header.appendChild(left);
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'close-btn';
+    close.textContent = '×';
+    close.addEventListener('click', () => {
+      state.showExport = false;
+      render();
+    });
+    header.appendChild(close);
+    modal.appendChild(header);
+
+    const tabs = document.createElement('div');
+    tabs.className = 'modal-tabs';
+    const aiTab = document.createElement('button');
+    aiTab.type = 'button';
+    aiTab.className = `tab-btn ${state.exportMode === 'ai' ? 'active' : ''}`;
+    aiTab.textContent = 'AI-Ready (clean text)';
+    aiTab.addEventListener('click', () => {
+      state.exportMode = 'ai';
+      render();
+    });
+    const editorTab = document.createElement('button');
+    editorTab.type = 'button';
+    editorTab.className = `tab-btn ${state.exportMode === 'editor' ? 'active' : ''}`;
+    editorTab.textContent = 'Editor Format (full)';
+    editorTab.addEventListener('click', () => {
+      state.exportMode = 'editor';
+      render();
+    });
+    tabs.appendChild(aiTab);
+    tabs.appendChild(editorTab);
+    modal.appendChild(tabs);
+
+    const note = document.createElement('div');
+    note.className = 'modal-note';
+    note.textContent = state.exportMode === 'ai'
+      ? 'Clean XML output ready to paste into your AI prompt. No visual markers.'
+      : 'Full format including preamble — use this to reload the file for editing.';
+    modal.appendChild(note);
+
+    const preWrap = document.createElement('div');
+    preWrap.className = 'modal-pre-wrap';
+    const pre = document.createElement('pre');
+    pre.className = 'modal-pre';
+    pre.textContent = getExportContent();
+    preWrap.appendChild(pre);
+    modal.appendChild(preWrap);
+
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'copy-btn';
+    copy.textContent = state.copied ? 'Copied!' : 'Copy to Clipboard';
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(getExportContent());
+        state.copied = true;
+        render();
+        setTimeout(() => {
+          state.copied = false;
+          render();
+        }, 1800);
+      } catch {
+        window.alert('Copy failed in this browser.');
+      }
+    });
+    actions.appendChild(copy);
+
+    const download = document.createElement('button');
+    download.type = 'button';
+    download.className = 'download-btn';
+    download.textContent = 'Download';
+    download.addEventListener('click', () => {
+      const ext = state.exportMode === 'ai' ? 'txt' : 'md';
+      const filename = `prompt_${state.exportMode === 'ai' ? 'ai_ready' : 'editor'}.${ext}`;
+      downloadText(filename, getExportContent());
+    });
+    actions.appendChild(download);
+
+    modal.appendChild(actions);
+    backdrop.appendChild(modal);
+    root.appendChild(backdrop);
+  }
+
+  function render() {
+    const app = document.getElementById('app');
+    app.replaceChildren();
+
+    const shell = document.createElement('div');
+    shell.className = 'app-shell';
+    renderHeader(shell);
+    renderHelp(shell);
+
+    const main = document.createElement('main');
+    const mainInner = document.createElement('div');
+    mainInner.className = 'main-inner';
+    if (state.showRaw) {
+      renderRawCard(mainInner);
+    } else {
+      renderPreambleCard(mainInner);
+      renderStructureCard(mainInner);
+    }
+    main.appendChild(mainInner);
+    shell.appendChild(main);
+    renderExportModal(shell);
+    app.appendChild(shell);
+  }
+
+  function init() {
+    state.doc = parseDocument(SAMPLE_DOC);
+    state.preambleVal = state.doc.preamble;
+    render();
+  }
+
+  window.addEventListener('DOMContentLoaded', init);
+})();
