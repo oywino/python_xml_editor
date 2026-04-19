@@ -17,12 +17,14 @@ The app runs entirely locally. Python serves the static files, and the browser h
 - add root, child, and sibling elements
 - reorder nodes with buttons or drag-and-drop
 - edit text nodes directly
+- escape XML special characters on export
+- support common XML-style attribute names such as `data-id` and `xml:lang`
 - preview raw XML output
 - export either AI-ready XML text or full editor format
 
 ## Project Structure
 
-- `app.py`: local launcher that serves the app and opens the browser
+- `XML_Editor.py`: local launcher that serves the app and opens the browser
 - `index.html`: single HTML mount point
 - `app.js`: main application logic, parsing, tree editing, rendering, and export
 - `style.css`: application styling
@@ -39,13 +41,13 @@ The app runs entirely locally. Python serves the static files, and the browser h
 From the repository root:
 
 ```bash
-python app.py
+python XML_Editor.py
 ```
 
 If your machine uses the Windows launcher instead of `python`, you can also use:
 
 ```bash
-py app.py
+py XML_Editor.py
 ```
 
 The launcher will:
@@ -73,7 +75,7 @@ This repository includes:
 
 The application has two parts:
 
-1. a Python wrapper in `app.py` that starts a local HTTP server
+1. a Python wrapper in `XML_Editor.py` that starts a local HTTP server
 2. a plain JavaScript single-page app in `app.js` that parses mixed preamble + XML text into a tree, renders it visually, and serializes it back out for export
 
 The editor keeps all state in memory in the browser session and does not currently save automatically.
@@ -83,4 +85,5 @@ More detail is available in `docs/ARCHITECTURE.md`.
 ## Notes
 
 - the XML parsing logic is custom and currently optimized for simple prompt-style XML
+- export escapes text and attribute values so characters like `&`, `<`, and `"` remain valid XML
 - the app is intentionally lightweight and has no front-end framework or backend service

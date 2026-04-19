@@ -88,6 +88,13 @@ button {
   gap: 10px;
 }
 
+.brand-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .brand-icon {
   width: 28px;
   height: 28px;
@@ -104,6 +111,18 @@ button {
   font-size: 14px;
   font-weight: 600;
   color: #1e293b;
+}
+
+.brand-version {
+  border: 1px solid var(--blue-200);
+  border-radius: 999px;
+  background: var(--blue-50);
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 5px 8px;
 }
 
 .spacer {
@@ -154,11 +173,12 @@ button {
 
 .btn-icon {
   padding: 9px;
-  color: var(--muted-2);
+  color: #000;
+  font-size: 15px;
 }
 
 .btn-icon:hover {
-  color: var(--muted);
+  color: #000;
 }
 
 .help-panel {
@@ -334,23 +354,28 @@ button {
   margin-bottom: 4px;
 }
 
-.node-card {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.element-frame {
   background: #fff;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   transition: border-color .15s ease, box-shadow .15s ease, opacity .15s ease, background .15s ease;
+  overflow: hidden;
 }
 
-.node-card:hover {
+.element-frame:hover {
   border-color: #93c5fd;
   box-shadow: var(--shadow);
 }
 
-.node-card.error {
+.element-frame.error {
   border-color: var(--red-300);
+}
+
+.node-card {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
 }
 
 .dragging {
@@ -362,14 +387,26 @@ button {
   box-shadow: 0 0 0 3px rgba(59,130,246,.12);
 }
 
+.element-frame-header,
+.element-frame-footer {
+  min-height: 44px;
+}
+
+.element-frame-footer {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 4px;
+}
+
 .grip {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 34px;
   align-self: stretch;
-  border-right: 1px solid var(--border-soft);
-  color: #cbd5e1;
+  color: #000;
+  font-size: 14px;
+  font-weight: 600;
   user-select: none;
   cursor: grab;
 }
@@ -379,12 +416,12 @@ button {
 .action-btn {
   border: 0;
   background: transparent;
-  color: var(--muted-2);
+  color: #000;
 }
 
 .expand-btn {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 8px;
   margin-left: 4px;
 }
@@ -393,7 +430,7 @@ button {
 .action-btn:hover,
 .icon-btn:hover {
   background: #f8fafc;
-  color: var(--muted);
+  color: #000;
 }
 
 .node-main {
@@ -406,8 +443,11 @@ button {
 }
 
 .tag-symbol {
-  color: #60a5fa;
-  font-size: 13px;
+  color: #000;
+  width: 17px;
+  height: 17px;
+  display: block;
+  flex: 0 0 auto;
 }
 
 .tag-pill,
@@ -489,10 +529,26 @@ button {
 }
 
 .action-btn {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.arrow-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+  margin: 0 auto;
+  flex: 0 0 auto;
+}
+
+.delete-icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+  margin: 0 auto;
 }
 
 .action-btn.green:hover {
@@ -521,8 +577,7 @@ button {
 .children-wrap {
   margin-top: 4px;
   margin-left: 24px;
-  padding-left: 12px;
-  border-left: 2px solid var(--blue-100);
+  padding: 4px 12px 4px 12px;
 }
 
 .text-row {
@@ -533,10 +588,10 @@ button {
 }
 
 .text-icon {
-  color: #cbd5e1;
+  color: #000;
   padding-top: 9px;
   padding-left: 4px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .text-node-textarea {
@@ -554,10 +609,6 @@ button {
 
 .text-node-textarea:hover {
   border-color: var(--border);
-}
-
-.text-actions {
-  padding-top: 6px;
 }
 
 .node-indent-1 { margin-left: 24px; }
@@ -658,11 +709,11 @@ button {
   border: 0;
   border-radius: 12px;
   background: transparent;
-  color: var(--muted-2);
-  font-size: 20px;
+  color: #000;
+  font-size: 22px;
 }
 
-.close-btn:hover { background: #f1f5f9; color: var(--muted); }
+.close-btn:hover { background: #f1f5f9; color: #000; }
 
 .modal-tabs {
   display: flex;

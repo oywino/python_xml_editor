@@ -22,7 +22,12 @@
   </response_format>
 </prompt>`;
 
+  const APP_VERSION = 'v0.1.7';
+  const HEARTBEAT_INTERVAL_MS = 5000;
+  const HISTORY_LIMIT = 100;
+  const TYPING_COMMIT_DELAY_MS = 800;
   let idCounter = 0;
+  const XML_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]*$/;
 
   const state = {
     doc: null,
@@ -35,6 +40,9 @@
     showHelp: false,
     collapsed: {},
     dragNodeId: null,
+    historyPast: [],
+    historyFuture: [],
+    pendingHistory: null,
   };
 
   function generateId() {
@@ -42,14 +50,58 @@
     return `node_${idCounter}_${Math.random().toString(36).slice(2, 7)}`;
   }
 
-  function parseAttributes(attrStr) {
+  function isValidXmlName(name) {
+    return XML_NAME_RE.test(String(name || ''));
+  }
+
+  function decodeXmlEntities(text) {
+    return String(text || '').replace(/&(#x?[0-9a-fA-F]+|amp|lt|gt|quot|apos);/g, (match, entity) => {
+      if (entity === 'amp') return '&';
+      if (entity === 'lt') return '<';
+      if (entity === 'gt') return '>';
+      if (entity === 'quot') return '"';
+      if (entity === 'apos') return "'";
+      if (!entity.startsWith('#')) return match;
+
+      const isHex = entity[1]?.toLowerCase() === 'x';
+      const digits = isHex ? entity.slice(2) : entity.slice(1);
+      const codePoint = Number.parseInt(digits, isHex ? 16 : 10);
+      if (!Number.isFinite(codePoint)) return match;
+
+      try {
+        return String.fromCodePoint(codePoint);
+      } catch {
+        return match;
+      }
+    });
+  }
+
+  function escapeXmlText(text) {
+    return String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function escapeXmlAttribute(value) {
+    return escapeXmlText(value)
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  }
+
+  function parseLooseAttributes(attrStr, { decodeValues = false } = {}) {
     const attrs = {};
-    const regex = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+    const regex = /([A-Za-z_][A-Za-z0-9_.:-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'))?/g;
     let m;
     while ((m = regex.exec(attrStr)) !== null) {
-      attrs[m[1]] = m[2] ?? m[3] ?? '';
+      const rawValue = m[2] ?? m[3] ?? '';
+      attrs[m[1]] = decodeValues ? decodeXmlEntities(rawValue) : rawValue;
     }
     return attrs;
+  }
+
+  function parseAttributes(attrStr) {
+    return parseLooseAttributes(attrStr, { decodeValues: true });
   }
 
   function tokenize(xml) {
@@ -140,7 +192,7 @@
         const textNode = {
           id: generateId(),
           type: 'text',
-          text: token.text.trim(),
+          text: decodeXmlEntities(token.text.trim()),
           children: [],
         };
         if (stack.length > 0) {
@@ -178,18 +230,18 @@
     let result = '';
     for (const node of nodes) {
       if (node.type === 'text') {
-        const text = (node.text || '').trim();
+        const text = escapeXmlText((node.text || '').trim());
         if (text) result += `${pad}${text}\n`;
       } else {
         const attrs = node.attributes
-          ? Object.entries(node.attributes).map(([k, v]) => ` ${k}="${v}"`).join('')
+          ? Object.entries(node.attributes).map(([k, v]) => ` ${k}="${escapeXmlAttribute(v)}"`).join('')
           : '';
         if (node.children.length === 0) {
           result += `${pad}<${node.tag}${attrs} />\n`;
         } else {
           const hasOnlyText = node.children.length === 1 && node.children[0].type === 'text';
           if (hasOnlyText) {
-            const text = (node.children[0].text || '').trim();
+            const text = escapeXmlText((node.children[0].text || '').trim());
             result += `${pad}<${node.tag}${attrs}>${text}</${node.tag}>\n`;
           } else {
             result += `${pad}<${node.tag}${attrs}>\n`;
@@ -206,13 +258,13 @@
     let result = '';
     for (const node of nodes) {
       if (node.type === 'text') {
-        const text = (node.text || '').trim();
+        const text = escapeXmlText((node.text || '').trim());
         if (text) result += `${text}\n`;
       } else {
         const attrs = node.attributes
           ? Object.entries(node.attributes)
               .filter(([, v]) => v !== undefined)
-              .map(([k, v]) => ` ${k}="${v}"`).join('')
+              .map(([k, v]) => ` ${k}="${escapeXmlAttribute(v)}"`).join('')
           : '';
         if (node.children.length === 0) {
           result += `<${node.tag}${attrs} />\n`;
@@ -333,15 +385,122 @@
     return result;
   }
 
-  function setDoc(doc) {
+  function cloneDoc(doc) {
+    return JSON.parse(JSON.stringify(doc));
+  }
+
+  function docsEqual(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  function loadDocIntoState(doc) {
     state.doc = doc;
     state.preambleVal = doc.preamble;
+  }
+
+  function pushHistorySnapshot(doc) {
+    state.historyPast.push(cloneDoc(doc));
+    if (state.historyPast.length > HISTORY_LIMIT) state.historyPast.shift();
+  }
+
+  function clearPendingHistoryTimer() {
+    if (state.pendingHistory?.timerId) {
+      window.clearTimeout(state.pendingHistory.timerId);
+    }
+  }
+
+  function schedulePendingHistoryCommit() {
+    if (!state.pendingHistory) return;
+    clearPendingHistoryTimer();
+    state.pendingHistory.timerId = window.setTimeout(() => {
+      commitPendingHistory();
+    }, TYPING_COMMIT_DELAY_MS);
+  }
+
+  function beginPendingHistorySession(key) {
+    if (!state.doc) return;
+    if (state.pendingHistory?.key === key) {
+      schedulePendingHistoryCommit();
+      return;
+    }
+
+    commitPendingHistory();
+    state.pendingHistory = {
+      key,
+      snapshot: cloneDoc(state.doc),
+      timerId: null,
+    };
+    schedulePendingHistoryCommit();
+  }
+
+  function commitPendingHistory() {
+    if (!state.pendingHistory) return;
+    clearPendingHistoryTimer();
+    const { snapshot } = state.pendingHistory;
+    state.pendingHistory = null;
+
+    if (!state.doc || docsEqual(snapshot, state.doc)) return;
+    pushHistorySnapshot(snapshot);
+    state.historyFuture = [];
+  }
+
+  function setDoc(doc, opts = {}) {
+    const { recordHistory = true } = opts;
+    commitPendingHistory();
+
+    if (state.doc && docsEqual(state.doc, doc)) return;
+    if (recordHistory && state.doc) {
+      pushHistorySnapshot(state.doc);
+      state.historyFuture = [];
+    }
+
+    loadDocIntoState(doc);
     render();
   }
 
   function updateRoot(root) {
-    state.doc = { ...state.doc, root };
+    setDoc({ ...state.doc, root });
+  }
+
+  function undo() {
+    commitPendingHistory();
+    if (state.historyPast.length === 0 || !state.doc) return;
+
+    state.historyFuture.push(cloneDoc(state.doc));
+    const previous = state.historyPast.pop();
+    loadDocIntoState(previous);
+    state.preambleEditing = false;
     render();
+  }
+
+  function redo() {
+    commitPendingHistory();
+    if (state.historyFuture.length === 0 || !state.doc) return;
+
+    pushHistorySnapshot(state.doc);
+    const next = state.historyFuture.pop();
+    loadDocIntoState(next);
+    state.preambleEditing = false;
+    render();
+  }
+
+  function isEditableTarget(target) {
+    return target instanceof HTMLElement
+      && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+  }
+
+  function handleGlobalKeydown(event) {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    if (isEditableTarget(event.target)) return;
+
+    const key = event.key.toLowerCase();
+    if (key === 'z' && !event.shiftKey) {
+      event.preventDefault();
+      undo();
+    } else if (key === 'y' || (key === 'z' && event.shiftKey)) {
+      event.preventDefault();
+      redo();
+    }
   }
 
   function getExportContent() {
@@ -356,10 +515,95 @@
       .replace(/"/g, '&quot;');
   }
 
-  function icon(text) {
-    const span = document.createElement('span');
-    span.textContent = text;
-    return span;
+  function createTagIcon() {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('class', 'tag-symbol');
+    svg.setAttribute('aria-hidden', 'true');
+
+    const tagPath = document.createElementNS(ns, 'path');
+    tagPath.setAttribute('d', 'M2.5 5.5V2.5H5.5L13.5 10.5L10.5 13.5L2.5 5.5Z');
+    tagPath.setAttribute('fill', 'none');
+    tagPath.setAttribute('stroke', 'currentColor');
+    tagPath.setAttribute('stroke-width', '1.5');
+    tagPath.setAttribute('stroke-linejoin', 'round');
+
+    const hole = document.createElementNS(ns, 'circle');
+    hole.setAttribute('cx', '4.5');
+    hole.setAttribute('cy', '4.5');
+    hole.setAttribute('r', '0.9');
+    hole.setAttribute('fill', 'currentColor');
+
+    svg.append(tagPath, hole);
+    return svg;
+  }
+
+  function createTrashIcon() {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('class', 'delete-icon');
+    svg.setAttribute('aria-hidden', 'true');
+
+    const lid = document.createElementNS(ns, 'path');
+    lid.setAttribute('d', 'M5.5 3.5H10.5');
+    lid.setAttribute('fill', 'none');
+    lid.setAttribute('stroke', 'currentColor');
+    lid.setAttribute('stroke-width', '1.5');
+    lid.setAttribute('stroke-linecap', 'round');
+
+    const rim = document.createElementNS(ns, 'path');
+    rim.setAttribute('d', 'M3 4.5H13');
+    rim.setAttribute('fill', 'none');
+    rim.setAttribute('stroke', 'currentColor');
+    rim.setAttribute('stroke-width', '1.5');
+    rim.setAttribute('stroke-linecap', 'round');
+
+    const body = document.createElementNS(ns, 'path');
+    body.setAttribute('d', 'M4.5 5.5L5.1 12.5C5.15 13.05 5.61 13.5 6.17 13.5H9.83C10.39 13.5 10.85 13.05 10.9 12.5L11.5 5.5');
+    body.setAttribute('fill', 'none');
+    body.setAttribute('stroke', 'currentColor');
+    body.setAttribute('stroke-width', '1.5');
+    body.setAttribute('stroke-linecap', 'round');
+    body.setAttribute('stroke-linejoin', 'round');
+
+    const leftLine = document.createElementNS(ns, 'path');
+    leftLine.setAttribute('d', 'M6.5 7V11.5');
+    leftLine.setAttribute('fill', 'none');
+    leftLine.setAttribute('stroke', 'currentColor');
+    leftLine.setAttribute('stroke-width', '1.5');
+    leftLine.setAttribute('stroke-linecap', 'round');
+
+    const rightLine = document.createElementNS(ns, 'path');
+    rightLine.setAttribute('d', 'M9.5 7V11.5');
+    rightLine.setAttribute('fill', 'none');
+    rightLine.setAttribute('stroke', 'currentColor');
+    rightLine.setAttribute('stroke-width', '1.5');
+    rightLine.setAttribute('stroke-linecap', 'round');
+
+    svg.append(lid, rim, body, leftLine, rightLine);
+    return svg;
+  }
+
+  function createArrowIcon(direction) {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('class', 'arrow-icon');
+    svg.setAttribute('aria-hidden', 'true');
+
+    const triangle = document.createElementNS(ns, 'path');
+    const pathByDirection = {
+      up: 'M8 4L12.5 11H3.5L8 4Z',
+      down: 'M3.5 5L12.5 5L8 12Z',
+      right: 'M5 3.5L12 8L5 12.5V3.5Z',
+    };
+    triangle.setAttribute('d', pathByDirection[direction] || pathByDirection.down);
+    triangle.setAttribute('fill', 'currentColor');
+
+    svg.appendChild(triangle);
+    return svg;
   }
 
   function btn(label, opts = {}) {
@@ -396,19 +640,23 @@
       input.classList.add('error');
       errorLine.textContent = `⚠ ${message}`;
       errorLine.classList.remove('hidden');
-      container.closest('.node-card')?.classList.add('error');
+      container.closest('.element-frame, .node-card')?.classList.add('error');
     }
 
     function clearError() {
       input.classList.remove('error');
       errorLine.classList.add('hidden');
-      container.closest('.node-card')?.classList.remove('error');
+      container.closest('.element-frame, .node-card')?.classList.remove('error');
     }
 
     function save() {
       const name = input.value.trim();
       if (!name) {
         render();
+        return;
+      }
+      if (!isValidXmlName(name)) {
+        showError('Use a valid XML name. Start with a letter or underscore, then use letters, numbers, ., -, _, or :.');
         return;
       }
       if (isDuplicate(name)) {
@@ -421,7 +669,15 @@
 
     input.addEventListener('input', () => {
       const val = input.value.trim();
-      if (val && isDuplicate(val)) showError(`"${val}" already exists among siblings.`);
+      if (!val) {
+        clearError();
+        return;
+      }
+      if (!isValidXmlName(val)) {
+        showError('Use a valid XML name. Start with a letter or underscore, then use letters, numbers, ., -, _, or :.');
+        return;
+      }
+      if (isDuplicate(val)) showError(`"${val}" already exists among siblings.`);
       else clearError();
     });
     input.addEventListener('blur', save);
@@ -443,12 +699,7 @@
       : '';
 
     function save() {
-      const attrs = {};
-      const regex = /(\w+)(?:\s*=\s*"([^"]*)")?/g;
-      let m;
-      while ((m = regex.exec(input.value)) !== null) {
-        attrs[m[1]] = m[2] ?? '';
-      }
+      const attrs = parseLooseAttributes(input.value);
       updateRoot(updateNodeById(nodes, node.id, (n) => ({ ...n, attributes: attrs })));
     }
 
@@ -481,21 +732,12 @@
     textarea.value = (node.text || '').trim();
     textarea.rows = Math.max(1, textarea.value ? textarea.value.split('\n').length : 1);
     textarea.addEventListener('input', () => {
+      beginPendingHistorySession(`text:${node.id}`);
       textarea.rows = Math.max(1, textarea.value ? textarea.value.split('\n').length : 1);
       state.doc.root = updateNodeById(nodes, node.id, (n) => ({ ...n, text: textarea.value }));
     });
+    textarea.addEventListener('blur', () => commitPendingHistory());
     wrap.appendChild(textarea);
-
-    const actions = document.createElement('div');
-    actions.className = 'text-actions';
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'action-btn red';
-    del.title = 'Delete text node';
-    del.textContent = '🗑';
-    del.addEventListener('click', () => updateRoot(removeNodeById(nodes, node.id)));
-    actions.appendChild(del);
-    wrap.appendChild(actions);
 
     row.appendChild(wrap);
     return row;
@@ -505,30 +747,46 @@
     const row = document.createElement('div');
     row.className = `node-row node-indent-${Math.min(depth, 10)}`;
 
+    const frame = document.createElement('div');
+    frame.className = 'element-frame';
+
     const card = document.createElement('div');
-    card.className = 'node-card';
+    card.className = 'node-card element-frame-header';
     card.draggable = true;
+    let dragDepth = 0;
     card.addEventListener('dragstart', (e) => {
       state.dragNodeId = node.id;
-      card.classList.add('dragging');
+      frame.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', node.id);
     });
     card.addEventListener('dragend', () => {
       state.dragNodeId = null;
-      card.classList.remove('dragging');
+      dragDepth = 0;
+      frame.classList.remove('dragging');
       document.querySelectorAll('.drag-over').forEach((el) => el.classList.remove('drag-over'));
     });
-    card.addEventListener('dragover', (e) => {
+
+    frame.addEventListener('dragenter', (e) => {
       e.preventDefault();
       if (!state.dragNodeId || state.dragNodeId === node.id) return;
-      card.classList.add('drag-over');
+      dragDepth += 1;
+      frame.classList.add('drag-over');
     });
-    card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
-    card.addEventListener('drop', (e) => {
+    frame.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (!state.dragNodeId || state.dragNodeId === node.id) return;
+      frame.classList.add('drag-over');
+    });
+    frame.addEventListener('dragleave', () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) frame.classList.remove('drag-over');
+    });
+    frame.addEventListener('drop', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      card.classList.remove('drag-over');
+      dragDepth = 0;
+      frame.classList.remove('drag-over');
       const dragged = e.dataTransfer.getData('text/plain');
       if (dragged && dragged !== node.id) {
         updateRoot(moveNode(nodes, dragged, { parentId: node.id, index: node.children.length }));
@@ -544,8 +802,10 @@
     expand.type = 'button';
     expand.className = 'expand-btn';
     const hasChildren = node.children.length > 0;
-    expand.textContent = hasChildren ? (state.collapsed[node.id] ? '▸' : '▾') : '';
     expand.title = state.collapsed[node.id] ? 'Expand' : 'Collapse';
+    if (hasChildren) {
+      expand.appendChild(createArrowIcon(state.collapsed[node.id] ? 'right' : 'down'));
+    }
     expand.addEventListener('click', () => {
       state.collapsed[node.id] = !state.collapsed[node.id];
       render();
@@ -555,10 +815,7 @@
     const main = document.createElement('div');
     main.className = 'node-main';
 
-    const tagSymbol = document.createElement('span');
-    tagSymbol.className = 'tag-symbol';
-    tagSymbol.textContent = '🏷';
-    main.appendChild(tagSymbol);
+    main.appendChild(createTagIcon());
 
     const tagWrap = document.createElement('div');
     const tagBtn = document.createElement('button');
@@ -602,7 +859,7 @@
     moveUpBtn.type = 'button';
     moveUpBtn.className = 'action-btn';
     moveUpBtn.title = 'Move up';
-    moveUpBtn.textContent = '▲';
+    moveUpBtn.appendChild(createArrowIcon('up'));
     moveUpBtn.addEventListener('click', () => {
       const { siblings, parentId } = getNodeChildrenSiblings(nodes, node.id);
       const idx = siblings.findIndex((n) => n.id === node.id);
@@ -618,7 +875,7 @@
     moveDownBtn.type = 'button';
     moveDownBtn.className = 'action-btn';
     moveDownBtn.title = 'Move down';
-    moveDownBtn.textContent = '▼';
+    moveDownBtn.appendChild(createArrowIcon('down'));
     moveDownBtn.addEventListener('click', () => {
       const { siblings, parentId } = getNodeChildrenSiblings(nodes, node.id);
       const idx = siblings.findIndex((n) => n.id === node.id);
@@ -666,25 +923,24 @@
     deleteBtn.type = 'button';
     deleteBtn.className = 'action-btn red';
     deleteBtn.title = 'Delete';
-    deleteBtn.textContent = '🗑';
+    deleteBtn.appendChild(createTrashIcon());
     deleteBtn.addEventListener('click', () => updateRoot(removeNodeById(nodes, node.id)));
     actions.appendChild(deleteBtn);
 
     card.appendChild(actions);
-    row.appendChild(card);
+    frame.appendChild(card);
 
     const isCollapsed = !!state.collapsed[node.id];
     if (!isCollapsed && hasChildren) {
       const childrenWrap = document.createElement('div');
-      childrenWrap.className = 'children-wrap';
+      childrenWrap.className = 'children-wrap element-frame-children';
       for (const child of node.children) {
         childrenWrap.appendChild(renderNode(child, 0, nodes));
       }
-      row.appendChild(childrenWrap);
+      frame.appendChild(childrenWrap);
 
       const closing = document.createElement('div');
-      closing.className = 'node-card';
-      closing.style.marginTop = '4px';
+      closing.className = 'node-card element-frame-footer';
       const grip2 = document.createElement('div');
       grip2.className = 'grip';
       grip2.textContent = '⋮⋮';
@@ -695,18 +951,16 @@
       closing.appendChild(spacer);
       const main2 = document.createElement('div');
       main2.className = 'node-main';
-      const tagSymbol2 = document.createElement('span');
-      tagSymbol2.className = 'tag-symbol';
-      tagSymbol2.textContent = '🏷';
-      main2.appendChild(tagSymbol2);
+      main2.appendChild(createTagIcon());
       const closingTag = document.createElement('span');
       closingTag.className = 'tag-pill-closing';
       closingTag.textContent = `</${node.tag}>`;
       main2.appendChild(closingTag);
       closing.appendChild(main2);
-      row.appendChild(closing);
+      frame.appendChild(closing);
     }
 
+    row.appendChild(frame);
     return row;
   }
 
@@ -737,10 +991,20 @@
     iconBox.className = 'brand-icon';
     iconBox.textContent = '</>';
     brand.appendChild(iconBox);
+
+    const brandText = document.createElement('div');
+    brandText.className = 'brand-text';
     const title = document.createElement('div');
     title.className = 'brand-title';
     title.textContent = 'XML Prompt Editor';
-    brand.appendChild(title);
+    brandText.appendChild(title);
+
+    const version = document.createElement('div');
+    version.className = 'brand-version';
+    version.textContent = APP_VERSION;
+    brandText.appendChild(version);
+
+    brand.appendChild(brandText);
     inner.appendChild(brand);
 
     const spacer = document.createElement('div');
@@ -754,9 +1018,9 @@
       className: 'btn',
       onClick: () => {
         if (!window.confirm('Start a new document? Unsaved changes will be lost.')) return;
-        setDoc(parseDocument('# New Prompt\n\n<prompt>\n  \n</prompt>'));
         state.showRaw = false;
         state.preambleEditing = false;
+        setDoc(parseDocument('# New Prompt\n\n<prompt>\n  \n</prompt>'));
       },
     });
     toolbar.appendChild(newBtn);
@@ -772,9 +1036,9 @@
       const reader = new FileReader();
       reader.onload = (ev) => {
         const text = String(ev.target?.result || '');
-        setDoc(parseDocument(text));
         state.showRaw = false;
         state.preambleEditing = false;
+        setDoc(parseDocument(text));
       };
       reader.readAsText(file);
       input.value = '';
@@ -834,6 +1098,7 @@
       ['+↓ button', 'add sibling below'],
       ['Trash icon', 'delete element'],
       ['Text area', 'edit text content'],
+      ['Ctrl+Z / Ctrl+Y', 'undo or redo document changes'],
     ];
     for (const [strong, rest] of items) {
       const div = document.createElement('div');
@@ -885,9 +1150,8 @@
         save.className = 'mini-btn mini-btn-primary';
         save.textContent = 'Save';
         save.addEventListener('click', () => {
-          state.doc = { ...state.doc, preamble: state.preambleVal };
           state.preambleEditing = false;
-          render();
+          setDoc({ ...state.doc, preamble: state.preambleVal });
         });
         actions.appendChild(save);
         const cancel = document.createElement('button');
@@ -1134,9 +1398,26 @@
     app.appendChild(shell);
   }
 
+  function sendHeartbeat() {
+    fetch('/__heartbeat', {
+      method: 'POST',
+      cache: 'no-store',
+      keepalive: true,
+    }).catch(() => {});
+  }
+
+  function startHeartbeat() {
+    sendHeartbeat();
+    window.setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+  }
+
   function init() {
-    state.doc = parseDocument(SAMPLE_DOC);
-    state.preambleVal = state.doc.preamble;
+    state.historyPast = [];
+    state.historyFuture = [];
+    state.pendingHistory = null;
+    loadDocIntoState(parseDocument(SAMPLE_DOC));
+    window.addEventListener('keydown', handleGlobalKeydown);
+    startHeartbeat();
     render();
   }
 

@@ -23,7 +23,7 @@ jobs:
           python-version: "3.11"
 
       - name: Compile Python launcher
-        run: python -m py_compile app.py
+        run: python -m py_compile XML_Editor.py
 
       - name: Verify required app files exist
         run: |
