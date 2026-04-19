@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.2.0';
+  const APP_VERSION = 'v0.2.2';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -310,7 +310,17 @@
       type: 'element',
       tag,
       attributes: {},
-      children: [{ id: generateId(), type: 'text', text: '', children: [], parent: undefined }],
+      children: [createTextNode(undefined, '')],
+      parent: parentId,
+    };
+  }
+
+  function createTextNode(parentId, text = '') {
+    return {
+      id: generateId(),
+      type: 'text',
+      text,
+      children: [],
       parent: parentId,
     };
   }
@@ -758,6 +768,8 @@
 
     const wrap = document.createElement('div');
     wrap.className = 'text-row';
+    const parentNode = node.parent ? findNodeById(nodes, node.parent) : null;
+    const canDeleteText = !!parentNode && parentNode.type === 'element' && parentNode.children.some((child) => child.type === 'element');
 
     const iconEl = document.createElement('div');
     iconEl.className = 'text-icon';
@@ -776,6 +788,16 @@
     });
     textarea.addEventListener('blur', () => commitPendingHistory());
     wrap.appendChild(textarea);
+
+    if (canDeleteText) {
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'action-btn red text-row-delete';
+      deleteBtn.title = 'Remove text content';
+      deleteBtn.appendChild(createTrashIcon());
+      deleteBtn.addEventListener('click', () => updateRoot(removeNodeById(nodes, node.id)));
+      wrap.appendChild(deleteBtn);
+    }
 
     row.appendChild(wrap);
     return row;
@@ -845,9 +867,11 @@
       expand.appendChild(createArrowIcon(state.collapsed[node.id] ? 'right' : 'down'));
     }
     expand.addEventListener('click', () => {
+      if (!hasChildren) return;
       state.collapsed[node.id] = !state.collapsed[node.id];
       render();
     });
+    expand.disabled = !hasChildren;
     card.appendChild(expand);
 
     const main = document.createElement('div');
@@ -939,6 +963,25 @@
     });
     actions.appendChild(addChildBtn);
 
+    const addTextBtn = document.createElement('button');
+    addTextBtn.type = 'button';
+    addTextBtn.className = 'action-btn blue action-btn-text';
+    addTextBtn.title = 'Add text content';
+    addTextBtn.textContent = '+T';
+    addTextBtn.addEventListener('click', () => {
+      const hasDirectText = node.children.some((child) => child.type === 'text');
+      if (hasDirectText) {
+        state.collapsed[node.id] = false;
+        render();
+        return;
+      }
+
+      const textNode = createTextNode(node.id, '');
+      state.collapsed[node.id] = false;
+      updateRoot(updateNodeById(nodes, node.id, (n) => ({ ...n, children: [textNode, ...n.children] })));
+    });
+    actions.appendChild(addTextBtn);
+
     const addSiblingBtn = document.createElement('button');
     addSiblingBtn.type = 'button';
     addSiblingBtn.className = 'action-btn blue';
@@ -969,13 +1012,15 @@
     frame.appendChild(card);
 
     const isCollapsed = !!state.collapsed[node.id];
-    if (!isCollapsed && hasChildren) {
-      const childrenWrap = document.createElement('div');
-      childrenWrap.className = 'children-wrap element-frame-children';
-      for (const child of node.children) {
-        childrenWrap.appendChild(renderNode(child, 0, nodes));
+    if (!isCollapsed) {
+      if (hasChildren) {
+        const childrenWrap = document.createElement('div');
+        childrenWrap.className = 'children-wrap element-frame-children';
+        for (const child of node.children) {
+          childrenWrap.appendChild(renderNode(child, 0, nodes));
+        }
+        frame.appendChild(childrenWrap);
       }
-      frame.appendChild(childrenWrap);
 
       const closing = document.createElement('div');
       closing.className = 'node-card element-frame-footer';

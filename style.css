@@ -426,6 +426,10 @@ button {
   margin-left: 4px;
 }
 
+.expand-btn:disabled {
+  cursor: default;
+}
+
 .expand-btn:hover,
 .action-btn:hover,
 .icon-btn:hover {
@@ -536,6 +540,13 @@ button {
   font-weight: 600;
 }
 
+.action-btn-text {
+  width: auto;
+  min-width: 34px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
 .arrow-icon {
   width: 14px;
   height: 14px;
@@ -585,6 +596,11 @@ button {
   align-items: flex-start;
   gap: 6px;
   margin-bottom: 4px;
+}
+
+.text-row-delete {
+  margin-top: 4px;
+  flex: 0 0 auto;
 }
 
 .text-icon {
