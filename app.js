@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.2.6';
+  const APP_VERSION = 'v0.3.0-mvp1.6';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -43,7 +43,10 @@
     historyPast: [],
     historyFuture: [],
     pendingHistory: null,
-    lastSavedDoc: null,
+    rawText: '',
+    lastAppliedRawText: '',
+    lastSavedRawText: '',
+    rawIssues: [],
   };
 
   function generateId() {
@@ -103,6 +106,228 @@
 
   function parseAttributes(attrStr) {
     return parseLooseAttributes(attrStr, { decodeValues: true });
+  }
+
+  function splitDocumentInput(input) {
+    const lines = String(input || '').split('\n');
+    let preamble = '';
+    let xmlStart = -1;
+    for (let i = 0; i < lines.length; i += 1) {
+      const trimmed = lines[i].trim();
+      if (trimmed.startsWith('<') && !trimmed.startsWith('<!')) {
+        xmlStart = i;
+        break;
+      }
+      preamble += (preamble ? '\n' : '') + lines[i];
+    }
+
+    return {
+      lines,
+      preamble,
+      xmlStart,
+      xmlText: xmlStart === -1 ? '' : lines.slice(xmlStart).join('\n'),
+    };
+  }
+
+  function buildLineStarts(text) {
+    const starts = [0];
+    for (let i = 0; i < text.length; i += 1) {
+      if (text[i] === '\n') starts.push(i + 1);
+    }
+    return starts;
+  }
+
+  function getLineNumberAt(lineStarts, index) {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      if (lineStarts[mid] <= index) low = mid + 1;
+      else high = mid - 1;
+    }
+    return high + 1;
+  }
+
+  function analyzeRawDocument(input) {
+    const source = String(input || '');
+    const parts = splitDocumentInput(source);
+
+    if (parts.xmlStart === -1) {
+      return {
+        isValid: true,
+        doc: { preamble: source, root: [] },
+        issues: [],
+        preamble: source,
+      };
+    }
+
+    const xmlText = parts.xmlText;
+    const xmlBaseLine = parts.xmlStart + 1;
+    const lineStarts = buildLineStarts(xmlText);
+    const issues = [];
+    const stack = [];
+    const pendingExpectedClosers = [];
+
+    function absoluteLine(index) {
+      return xmlBaseLine + getLineNumberAt(lineStarts, index) - 1;
+    }
+
+    function addIssue(message, line, highlightNeedle = '') {
+      const safeLine = Math.max(1, line || xmlBaseLine);
+      issues.push({
+        line: safeLine,
+        message,
+        highlightNeedle,
+      });
+    }
+
+    function addUniqueIssue(message, line, highlightNeedle = '') {
+      const safeLine = Math.max(1, line || xmlBaseLine);
+      if (issues.some((issue) => issue.line === safeLine && issue.message === message)) return;
+      addIssue(message, safeLine, highlightNeedle);
+    }
+
+    function escapeRegex(text) {
+      return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function hasFutureCloser(tag, fromIndex) {
+      const pattern = new RegExp(`<\\/\\s*${escapeRegex(tag)}\\s*>`);
+      return pattern.test(xmlText.slice(fromIndex));
+    }
+
+    function queuePendingExpectedCloser(tag, blockedByTag, blockedByLine) {
+      pendingExpectedClosers.push({ tag, blockedByTag, blockedByLine });
+    }
+
+    function consumePendingExpectedCloser(tag) {
+      const index = pendingExpectedClosers.findIndex((entry) => entry.tag === tag);
+      if (index === -1) return false;
+      return pendingExpectedClosers.splice(index, 1)[0];
+    }
+
+    let i = 0;
+    while (i < xmlText.length) {
+      if (xmlText[i] !== '<') {
+        i += 1;
+        continue;
+      }
+
+      const start = i;
+      const end = xmlText.indexOf('>', i);
+      if (end === -1) {
+        addIssue('Unterminated tag fragment.', absoluteLine(start), '<');
+        break;
+      }
+
+      const tagContent = xmlText.slice(i + 1, end);
+      if (tagContent.startsWith('!--')) {
+        const commentEnd = xmlText.indexOf('-->', i);
+        if (commentEnd === -1) {
+          addIssue('Unterminated comment.', absoluteLine(start), '<!--');
+          break;
+        }
+        i = commentEnd + 3;
+        continue;
+      }
+
+      if (tagContent.startsWith('!') || tagContent.startsWith('?')) {
+        i = end + 1;
+        continue;
+      }
+
+      if (tagContent.startsWith('/')) {
+        const tag = tagContent.slice(1).trim();
+        const line = absoluteLine(start);
+        if (!tag) {
+          addUniqueIssue('Empty closing tag.', line, '</');
+        } else if (!isValidXmlName(tag)) {
+          addUniqueIssue(`Invalid closing tag </${tag}>.`, line, `</${tag}>`);
+        } else {
+          const pendingExpectedCloser = consumePendingExpectedCloser(tag);
+          if (pendingExpectedCloser) {
+            addUniqueIssue(
+              `Expected </${tag}> before line ${pendingExpectedCloser.blockedByLine} </${pendingExpectedCloser.blockedByTag}>.`,
+              line,
+              `</${tag}>`
+            );
+            i = end + 1;
+            continue;
+          }
+        }
+
+        if (!tag || !isValidXmlName(tag)) {
+          i = end + 1;
+          continue;
+        }
+
+        if (stack.length === 0) {
+          addUniqueIssue(`Unexpected closing tag </${tag}>.`, line, `</${tag}>`);
+        } else if (stack[stack.length - 1].tag === tag) {
+          stack.pop();
+        } else {
+          let matchIndex = -1;
+          for (let j = stack.length - 1; j >= 0; j -= 1) {
+            if (stack[j].tag === tag) {
+              matchIndex = j;
+              break;
+            }
+          }
+          if (matchIndex !== -1) {
+            for (let j = stack.length - 1; j > matchIndex; j -= 1) {
+              const skippedNode = stack[j];
+              if (hasFutureCloser(skippedNode.tag, end + 1)) {
+                queuePendingExpectedCloser(skippedNode.tag, tag, line);
+              } else {
+                addUniqueIssue(`Missing </${skippedNode.tag}>.`, skippedNode.line, `<${skippedNode.tag}`);
+              }
+            }
+            stack.length = matchIndex;
+          } else {
+            addUniqueIssue(`Unexpected closing tag </${tag}>.`, line, `</${tag}>`);
+          }
+        }
+        i = end + 1;
+        continue;
+      }
+
+      const selfClosing = tagContent.endsWith('/');
+      const inner = selfClosing ? tagContent.slice(0, -1).trim() : tagContent;
+      const spaceIdx = inner.search(/\s/);
+      const tag = (spaceIdx === -1 ? inner : inner.slice(0, spaceIdx)).trim();
+      const line = absoluteLine(start);
+
+      if (!tag) {
+        addUniqueIssue(selfClosing ? 'Empty self-closing tag.' : 'Empty opening tag.', line, '<');
+      } else if (!isValidXmlName(tag)) {
+        addUniqueIssue(`Invalid tag name <${tag}>.`, line, `<${tag}`);
+      } else if (!selfClosing) {
+        stack.push({ tag, line });
+      }
+
+      i = end + 1;
+    }
+
+    for (let j = stack.length - 1; j >= 0; j -= 1) {
+      const node = stack[j];
+      addUniqueIssue(`Missing </${node.tag}>.`, node.line, `<${node.tag}`);
+    }
+
+    if (issues.length > 0) {
+      return {
+        isValid: false,
+        doc: null,
+        issues,
+        preamble: parts.preamble,
+      };
+    }
+
+    return {
+      isValid: true,
+      doc: parseDocument(source),
+      issues: [],
+      preamble: parts.preamble,
+    };
   }
 
   function tokenize(xml) {
@@ -208,21 +433,10 @@
   }
 
   function parseDocument(input) {
-    const lines = input.split('\n');
-    let preamble = '';
-    let xmlStart = -1;
-    for (let i = 0; i < lines.length; i += 1) {
-      const trimmed = lines[i].trim();
-      if (trimmed.startsWith('<') && !trimmed.startsWith('<!')) {
-        xmlStart = i;
-        break;
-      }
-      preamble += (preamble ? '\n' : '') + lines[i];
-    }
+    const { preamble, xmlStart, xmlText } = splitDocumentInput(input);
     if (xmlStart === -1) {
       return { preamble: input, root: [] };
     }
-    const xmlText = lines.slice(xmlStart).join('\n');
     return { preamble, root: buildTree(tokenize(xmlText)) };
   }
 
@@ -453,6 +667,25 @@
     return JSON.stringify(a) === JSON.stringify(b);
   }
 
+  function getCurrentRawText() {
+    if (state.preambleEditing && state.doc && !state.showRaw) {
+      return serializeDocument({ ...state.doc, preamble: state.preambleVal });
+    }
+    return state.rawText ?? '';
+  }
+
+  function hasPendingRawChanges() {
+    return getCurrentRawText() !== state.lastAppliedRawText;
+  }
+
+  function canUseVisualEditor() {
+    return !!state.doc && state.rawIssues.length === 0 && !hasPendingRawChanges();
+  }
+
+  function canExportCurrentDocument() {
+    return canUseVisualEditor();
+  }
+
   function getCurrentDocSnapshot() {
     if (!state.doc) return null;
     const snapshot = cloneDoc(state.doc);
@@ -461,15 +694,11 @@
   }
 
   function hasUnsavedChanges() {
-    const current = getCurrentDocSnapshot();
-    if (!current) return false;
-    if (!state.lastSavedDoc) return true;
-    return !docsEqual(state.lastSavedDoc, current);
+    return getCurrentRawText() !== state.lastSavedRawText;
   }
 
   function markCurrentStateAsSaved() {
-    const current = getCurrentDocSnapshot();
-    state.lastSavedDoc = current ? cloneDoc(current) : null;
+    state.lastSavedRawText = getCurrentRawText();
   }
 
   function collectElementIds(nodes, ids = new Set()) {
@@ -507,9 +736,30 @@
     return next;
   }
 
-  function loadDocIntoState(doc) {
+  function loadDocIntoState(doc, opts = {}) {
+    const { syncRawText = true, rawTextOverride = null } = opts;
     state.doc = doc;
     state.preambleVal = doc.preamble;
+    if (syncRawText) {
+      const nextRawText = rawTextOverride ?? serializeDocument(doc);
+      state.rawText = nextRawText;
+      state.lastAppliedRawText = nextRawText;
+      state.rawIssues = [];
+    }
+  }
+
+  function loadInvalidRawState(rawText, issues, preamble = '') {
+    commitPendingHistory();
+    state.doc = { preamble, root: [] };
+    state.preambleVal = preamble;
+    state.rawText = rawText;
+    state.lastAppliedRawText = rawText;
+    state.rawIssues = issues;
+    state.showRaw = true;
+    state.showExport = false;
+    state.copied = false;
+    state.preambleEditing = false;
+    render();
   }
 
   function pushHistorySnapshot(doc) {
@@ -559,16 +809,17 @@
   }
 
   function setDoc(doc, opts = {}) {
-    const { recordHistory = true, resetCollapsed = false } = opts;
+    const { recordHistory = true, resetCollapsed = false, rawTextOverride = null } = opts;
     commitPendingHistory();
+    const nextRawText = rawTextOverride ?? serializeDocument(doc);
 
-    if (state.doc && docsEqual(state.doc, doc)) return;
+    if (state.doc && docsEqual(state.doc, doc) && state.rawIssues.length === 0 && state.lastAppliedRawText === nextRawText) return;
     if (recordHistory && state.doc) {
       pushHistorySnapshot(state.doc);
       state.historyFuture = [];
     }
 
-    loadDocIntoState(doc);
+    loadDocIntoState(doc, { syncRawText: true, rawTextOverride: nextRawText });
     state.collapsed = resetCollapsed ? buildInitialCollapsedState(doc) : syncCollapsedState(doc, state.collapsed);
     render();
   }
@@ -601,6 +852,24 @@
     render();
   }
 
+  function applyRawText(text, { markSaved = false } = {}) {
+    state.rawText = text;
+    const analysis = analyzeRawDocument(text);
+    if (analysis.isValid) {
+      setDoc(analysis.doc, {
+        resetCollapsed: true,
+        rawTextOverride: text,
+      });
+      state.rawIssues = [];
+      if (markSaved) markCurrentStateAsSaved();
+      return true;
+    }
+
+    loadInvalidRawState(text, analysis.issues, analysis.preamble);
+    if (markSaved) markCurrentStateAsSaved();
+    return false;
+  }
+
   function isEditableTarget(target) {
     return target instanceof HTMLElement
       && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
@@ -631,6 +900,52 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  function buildRawHighlightHtml(text, issues, includeHighlights) {
+    const lines = String(text || '').split('\n');
+    const highlightsByLine = new Map();
+
+    if (includeHighlights) {
+      for (const issue of issues || []) {
+        if (!issue.highlightNeedle) continue;
+        const lineIndex = Math.max(0, issue.line - 1);
+        const list = highlightsByLine.get(lineIndex) || [];
+        list.push(issue.highlightNeedle);
+        highlightsByLine.set(lineIndex, list);
+      }
+    }
+
+    return lines.map((lineText, lineIndex) => {
+      const needles = highlightsByLine.get(lineIndex) || [];
+      if (needles.length === 0) return escapeHtml(lineText);
+
+      const ranges = [];
+      for (const needle of needles) {
+        const start = lineText.indexOf(needle);
+        if (start === -1) continue;
+        ranges.push({ start, end: start + needle.length });
+      }
+
+      ranges.sort((a, b) => a.start - b.start || a.end - b.end);
+      const filtered = [];
+      for (const range of ranges) {
+        const prev = filtered[filtered.length - 1];
+        if (!prev || range.start >= prev.end) filtered.push(range);
+      }
+
+      if (filtered.length === 0) return escapeHtml(lineText);
+
+      let cursor = 0;
+      let html = '';
+      for (const range of filtered) {
+        html += escapeHtml(lineText.slice(cursor, range.start));
+        html += `<span class="raw-highlight-error">${escapeHtml(lineText.slice(range.start, range.end))}</span>`;
+        cursor = range.end;
+      }
+      html += escapeHtml(lineText.slice(cursor));
+      return html;
+    }).join('\n');
   }
 
   function createTagIcon() {
@@ -1185,7 +1500,8 @@
         if (!window.confirm('Start a new document? Unsaved changes will be lost.')) return;
         state.showRaw = false;
         state.preambleEditing = false;
-        setDoc(parseDocument('# New Prompt\n\n<prompt>\n  \n</prompt>'), { resetCollapsed: true });
+        const nextRaw = '# New Prompt\n\n<prompt>\n  \n</prompt>';
+        applyRawText(nextRaw);
       },
     });
     toolbar.appendChild(newBtn);
@@ -1203,7 +1519,8 @@
         const text = String(ev.target?.result || '');
         state.showRaw = false;
         state.preambleEditing = false;
-        setDoc(parseDocument(text), { resetCollapsed: true });
+        const isValid = applyRawText(text, { markSaved: true });
+        if (!isValid) state.showRaw = true;
         markCurrentStateAsSaved();
       };
       reader.readAsText(file);
@@ -1213,13 +1530,25 @@
     toolbar.appendChild(openBtn);
     toolbar.appendChild(input);
 
-    const rawBtn = btn(state.showRaw ? '👁 Visual' : '📄 Raw', {
+    const rawBtnLabel = state.showRaw
+      ? (canUseVisualEditor() ? '👁 Visual' : '👁 Visual locked')
+      : '📄 Raw';
+    const rawBtn = btn(rawBtnLabel, {
       className: `btn ${state.showRaw ? 'btn-toggle-active' : ''}`,
+      title: state.showRaw && !canUseVisualEditor()
+        ? 'Apply valid raw text to re-enable Visual.'
+        : undefined,
       onClick: () => {
-        state.showRaw = !state.showRaw;
+        if (state.showRaw) {
+          if (!canUseVisualEditor()) return;
+          state.showRaw = false;
+        } else {
+          state.showRaw = true;
+        }
         render();
       },
     });
+    rawBtn.disabled = state.showRaw && !canUseVisualEditor();
     toolbar.appendChild(rawBtn);
 
     const helpBtn = btn('?', {
@@ -1235,11 +1564,14 @@
     const exportBtn = btn('⤓ Export', {
       className: 'btn btn-primary',
       onClick: () => {
+        if (!canExportCurrentDocument()) return;
         state.showExport = true;
         state.copied = false;
         render();
       },
     });
+    exportBtn.disabled = !canExportCurrentDocument();
+    if (!canExportCurrentDocument()) exportBtn.title = 'Fix and apply raw text before exporting.';
     toolbar.appendChild(exportBtn);
 
     inner.appendChild(toolbar);
@@ -1264,6 +1596,7 @@
       ['+↓ button', 'add sibling below'],
       ['Trash icon', 'delete element'],
       ['Text area', 'edit text content'],
+      ['Raw editor', 'fix malformed files and re-enable Visual'],
       ['Ctrl+Z / Ctrl+Y', 'undo or redo document changes'],
     ];
     for (const [strong, rest] of items) {
@@ -1414,18 +1747,136 @@
     header.appendChild(iconEl);
     const title = document.createElement('div');
     title.className = 'card-title';
-    title.textContent = 'Raw text preview';
+    title.textContent = 'Raw document editor';
     header.appendChild(title);
     const subtle = document.createElement('div');
     subtle.className = 'card-subtle';
-    subtle.textContent = 'Read-only — switch to Visual to edit';
+    if (state.rawIssues.length > 0) {
+      subtle.textContent = `${state.rawIssues.length} structural issue${state.rawIssues.length !== 1 ? 's' : ''} — fix here to re-enable Visual`;
+    } else if (hasPendingRawChanges()) {
+      subtle.textContent = 'Unapplied raw changes — apply to revalidate';
+    } else {
+      subtle.textContent = 'Editable raw mode — apply changes to update Visual';
+    }
     header.appendChild(subtle);
     card.appendChild(header);
 
-    const pre = document.createElement('pre');
-    pre.className = 'raw-pre';
-    pre.textContent = serializeDocumentFlat(state.doc);
-    card.appendChild(pre);
+    const body = document.createElement('div');
+    body.className = 'card-body';
+
+    const editorShell = document.createElement('div');
+    editorShell.className = 'raw-editor-shell';
+
+    const gutter = document.createElement('div');
+    gutter.className = 'raw-line-gutter';
+
+    const gutterLines = document.createElement('pre');
+    gutterLines.className = 'raw-line-gutter-lines';
+    gutter.appendChild(gutterLines);
+    editorShell.appendChild(gutter);
+
+    const editorPane = document.createElement('div');
+    editorPane.className = 'raw-editor-pane';
+
+    const highlightLayer = document.createElement('pre');
+    highlightLayer.className = 'raw-highlight-layer';
+    editorPane.appendChild(highlightLayer);
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'raw-editor';
+    textarea.value = state.rawText;
+    textarea.spellcheck = false;
+    textarea.wrap = 'off';
+
+    function syncEditorDecorations() {
+      const lineCount = Math.max(1, textarea.value.split('\n').length);
+      gutterLines.textContent = Array.from({ length: lineCount }, (_, index) => String(index + 1)).join('\n');
+      gutter.scrollTop = textarea.scrollTop;
+      highlightLayer.scrollTop = textarea.scrollTop;
+      highlightLayer.scrollLeft = textarea.scrollLeft;
+      highlightLayer.innerHTML = buildRawHighlightHtml(
+        textarea.value,
+        state.rawIssues,
+        !hasPendingRawChanges()
+      );
+    }
+
+    textarea.addEventListener('input', () => {
+      state.rawText = textarea.value;
+      syncEditorDecorations();
+    });
+    textarea.addEventListener('scroll', () => {
+      gutter.scrollTop = textarea.scrollTop;
+      highlightLayer.scrollTop = textarea.scrollTop;
+      highlightLayer.scrollLeft = textarea.scrollLeft;
+    });
+    editorPane.appendChild(textarea);
+    editorShell.appendChild(editorPane);
+    body.appendChild(editorShell);
+    syncEditorDecorations();
+
+    const actions = document.createElement('div');
+    actions.className = 'action-row';
+
+    const apply = document.createElement('button');
+    apply.type = 'button';
+    apply.className = 'mini-btn mini-btn-primary';
+    apply.textContent = 'Apply Raw Changes';
+    apply.addEventListener('click', () => {
+      applyRawText(textarea.value);
+    });
+    actions.appendChild(apply);
+
+    const revert = document.createElement('button');
+    revert.type = 'button';
+    revert.className = 'mini-btn mini-btn-muted';
+    revert.textContent = 'Revert to Last Applied';
+    revert.disabled = !hasPendingRawChanges();
+    revert.addEventListener('click', () => {
+      state.rawText = state.lastAppliedRawText;
+      render();
+    });
+    actions.appendChild(revert);
+    body.appendChild(actions);
+
+    const status = document.createElement('div');
+    status.className = `raw-status ${state.rawIssues.length > 0 ? 'error' : hasPendingRawChanges() ? 'warning' : 'success'}`;
+    if (state.rawIssues.length > 0) {
+      status.textContent = 'Visual is locked until the raw document becomes structurally valid.';
+    } else if (hasPendingRawChanges()) {
+      status.textContent = 'Raw edits are pending. Apply them to validate and update Visual.';
+    } else {
+      status.textContent = 'Raw text is structurally valid. You can switch back to Visual.';
+    }
+    body.appendChild(status);
+
+    if (state.rawIssues.length > 0) {
+      const diagnostics = document.createElement('div');
+      diagnostics.className = 'raw-diagnostics';
+
+      const diagTitle = document.createElement('div');
+      diagTitle.className = 'raw-diagnostics-title';
+      diagTitle.textContent = 'Structural diagnostics';
+      diagnostics.appendChild(diagTitle);
+
+      const list = document.createElement('div');
+      list.className = 'raw-issue-list';
+      for (const issue of state.rawIssues) {
+        const item = document.createElement('div');
+        item.className = 'raw-issue-item';
+
+        const msg = document.createElement('div');
+        msg.className = 'raw-issue-message';
+        msg.textContent = `Line ${issue.line}: ${issue.message}`;
+        item.appendChild(msg);
+
+        list.appendChild(item);
+      }
+      diagnostics.appendChild(list);
+      body.appendChild(diagnostics);
+    }
+
+    card.appendChild(body);
     container.appendChild(card);
   }
 
@@ -1543,6 +1994,10 @@
   }
 
   function render() {
+    if (!state.showRaw && !canUseVisualEditor()) {
+      state.showRaw = true;
+    }
+
     const app = document.getElementById('app');
     app.replaceChildren();
 
