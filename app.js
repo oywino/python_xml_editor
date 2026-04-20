@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.2.5';
+  const APP_VERSION = 'v0.2.6';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -43,6 +43,7 @@
     historyPast: [],
     historyFuture: [],
     pendingHistory: null,
+    lastSavedDoc: null,
   };
 
   function generateId() {
@@ -452,6 +453,25 @@
     return JSON.stringify(a) === JSON.stringify(b);
   }
 
+  function getCurrentDocSnapshot() {
+    if (!state.doc) return null;
+    const snapshot = cloneDoc(state.doc);
+    if (state.preambleEditing) snapshot.preamble = state.preambleVal;
+    return snapshot;
+  }
+
+  function hasUnsavedChanges() {
+    const current = getCurrentDocSnapshot();
+    if (!current) return false;
+    if (!state.lastSavedDoc) return true;
+    return !docsEqual(state.lastSavedDoc, current);
+  }
+
+  function markCurrentStateAsSaved() {
+    const current = getCurrentDocSnapshot();
+    state.lastSavedDoc = current ? cloneDoc(current) : null;
+  }
+
   function collectElementIds(nodes, ids = new Set()) {
     for (const node of nodes) {
       if (node.type !== 'element') continue;
@@ -601,7 +621,8 @@
   }
 
   function getExportContent() {
-    return state.exportMode === 'ai' ? serializeDocumentForAI(state.doc) : serializeDocument(state.doc);
+    const doc = getCurrentDocSnapshot() || state.doc;
+    return state.exportMode === 'ai' ? serializeDocumentForAI(doc) : serializeDocument(doc);
   }
 
   function escapeHtml(text) {
@@ -1183,6 +1204,7 @@
         state.showRaw = false;
         state.preambleEditing = false;
         setDoc(parseDocument(text), { resetCollapsed: true });
+        markCurrentStateAsSaved();
       };
       reader.readAsText(file);
       input.value = '';
@@ -1490,6 +1512,7 @@
     copy.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(getExportContent());
+        markCurrentStateAsSaved();
         state.copied = true;
         render();
         setTimeout(() => {
@@ -1510,6 +1533,7 @@
       const ext = state.exportMode === 'ai' ? 'txt' : 'md';
       const filename = `prompt_${state.exportMode === 'ai' ? 'ai_ready' : 'editor'}.${ext}`;
       downloadText(filename, getExportContent());
+      markCurrentStateAsSaved();
     });
     actions.appendChild(download);
 
@@ -1555,13 +1579,21 @@
     window.setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
   }
 
+  function handleBeforeUnload(event) {
+    if (!hasUnsavedChanges()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  }
+
   function init() {
     state.historyPast = [];
     state.historyFuture = [];
     state.pendingHistory = null;
     loadDocIntoState(parseDocument(SAMPLE_DOC));
     state.collapsed = buildInitialCollapsedState(state.doc);
+    markCurrentStateAsSaved();
     window.addEventListener('keydown', handleGlobalKeydown);
+    window.addEventListener('beforeunload', handleBeforeUnload);
     startHeartbeat();
     render();
   }
