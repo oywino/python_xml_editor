@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.3.0-mvp1.10';
+  const APP_VERSION = 'v0.3.0-mvp2.0';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -692,6 +692,17 @@
     };
   }
 
+  function createRawEditorLineJump(line) {
+    return {
+      targetLine: Math.max(1, line || 1),
+      scrollTop: null,
+      scrollLeft: 0,
+      selectionStart: null,
+      selectionEnd: null,
+      wasFocused: false,
+    };
+  }
+
   function syncRawTextToCanonicalDoc() {
     if (!state.doc || state.rawIssues.length > 0) return;
     state.rawText = serializeDocument(state.doc);
@@ -764,6 +775,7 @@
     state.preambleVal = preamble;
     state.rawText = rawText;
     state.rawIssues = issues;
+    state.rawEditorView = issues.length > 0 ? createRawEditorLineJump(issues[0].line) : null;
     state.showRaw = true;
     state.showExport = false;
     state.copied = false;
@@ -1521,7 +1533,7 @@
     const toolbar = document.createElement('div');
     toolbar.className = 'toolbar';
 
-    const newBtn = btn('＋ New', {
+    const newBtn = btn('New', {
       className: 'btn',
       onClick: () => {
         if (!window.confirm('Start a new document? Unsaved changes will be lost.')) return;
@@ -1533,7 +1545,7 @@
     });
     toolbar.appendChild(newBtn);
 
-    const openBtn = btn('⤴ Open File', { className: 'btn' });
+    const openBtn = btn('Open File', { className: 'btn' });
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.md,.txt,.xml';
@@ -1558,8 +1570,8 @@
     toolbar.appendChild(input);
 
     const rawBtnLabel = state.showRaw
-      ? (canUseVisualEditor() ? '👁 Visual' : '👁 Visual locked')
-      : '📄 Raw';
+      ? (canUseVisualEditor() ? 'Visual' : 'Visual locked')
+      : 'Raw';
     const rawBtn = btn(rawBtnLabel, {
       className: `btn ${state.showRaw ? 'btn-toggle-active' : ''}`,
       title: state.showRaw && !canUseVisualEditor()
@@ -1580,8 +1592,8 @@
     rawBtn.disabled = state.showRaw && !canUseVisualEditor();
     toolbar.appendChild(rawBtn);
 
-    const helpBtn = btn('?', {
-      className: 'btn btn-icon',
+    const helpBtn = btn('Help', {
+      className: 'btn',
       title: 'Help',
       onClick: () => {
         state.showHelp = !state.showHelp;
@@ -1590,7 +1602,7 @@
     });
     toolbar.appendChild(helpBtn);
 
-    const exportBtn = btn('⤓ Export', {
+    const exportBtn = btn('Save', {
       className: 'btn btn-primary',
       onClick: () => {
         if (!canExportCurrentDocument()) return;
@@ -1601,7 +1613,7 @@
     });
     exportBtn.disabled = !canExportCurrentDocument();
     if (!canExportCurrentDocument()) {
-      exportBtn.title = 'Fix raw errors before exporting.';
+      exportBtn.title = 'Fix raw errors before saving.';
     }
     toolbar.appendChild(exportBtn);
 
@@ -1909,12 +1921,22 @@
       const view = state.rawEditorView;
       state.rawEditorView = null;
       requestAnimationFrame(() => {
-        textarea.scrollTop = view.scrollTop;
-        textarea.scrollLeft = view.scrollLeft;
-        gutter.scrollTop = view.scrollTop;
-        highlightLayer.scrollTop = view.scrollTop;
-        highlightLayer.scrollLeft = view.scrollLeft;
-        if (view.wasFocused) {
+        if (view.targetLine != null) {
+          const lineHeight = Number.parseFloat(getComputedStyle(textarea).lineHeight) || 21.45;
+          const targetScrollTop = Math.max(0, (view.targetLine - 1) * lineHeight - lineHeight * 1.5);
+          textarea.scrollTop = targetScrollTop;
+          textarea.scrollLeft = 0;
+          gutter.scrollTop = targetScrollTop;
+          highlightLayer.scrollTop = targetScrollTop;
+          highlightLayer.scrollLeft = 0;
+        } else {
+          textarea.scrollTop = view.scrollTop;
+          textarea.scrollLeft = view.scrollLeft;
+          gutter.scrollTop = view.scrollTop;
+          highlightLayer.scrollTop = view.scrollTop;
+          highlightLayer.scrollLeft = view.scrollLeft;
+        }
+        if (view.wasFocused && view.selectionStart != null && view.selectionEnd != null) {
           textarea.focus({ preventScroll: true });
           const max = textarea.value.length;
           textarea.setSelectionRange(
@@ -1948,7 +1970,7 @@
     const left = document.createElement('div');
     const title = document.createElement('div');
     title.className = 'modal-title';
-    title.textContent = 'Export Prompt';
+    title.textContent = 'Save Prompt';
     left.appendChild(title);
     const subtitle = document.createElement('div');
     subtitle.className = 'modal-subtitle';
@@ -2008,7 +2030,7 @@
     const copy = document.createElement('button');
     copy.type = 'button';
     copy.className = 'copy-btn';
-    copy.textContent = state.copied ? 'Copied!' : 'Copy to Clipboard';
+    copy.textContent = state.copied ? 'Saved!' : 'Save to Clipboard';
     copy.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(getExportContent());
@@ -2028,7 +2050,7 @@
     const download = document.createElement('button');
     download.type = 'button';
     download.className = 'download-btn';
-    download.textContent = 'Download';
+    download.textContent = 'Save';
     download.addEventListener('click', () => {
       const ext = state.exportMode === 'ai' ? 'txt' : 'md';
       const filename = `prompt_${state.exportMode === 'ai' ? 'ai_ready' : 'editor'}.${ext}`;
