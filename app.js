@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.3.0-mvp1.6';
+  const APP_VERSION = 'v0.3.0-mvp1.7';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -1751,13 +1751,6 @@
     header.appendChild(title);
     const subtle = document.createElement('div');
     subtle.className = 'card-subtle';
-    if (state.rawIssues.length > 0) {
-      subtle.textContent = `${state.rawIssues.length} structural issue${state.rawIssues.length !== 1 ? 's' : ''} — fix here to re-enable Visual`;
-    } else if (hasPendingRawChanges()) {
-      subtle.textContent = 'Unapplied raw changes — apply to revalidate';
-    } else {
-      subtle.textContent = 'Editable raw mode — apply changes to update Visual';
-    }
     header.appendChild(subtle);
     card.appendChild(header);
 
@@ -1788,6 +1781,16 @@
     textarea.spellcheck = false;
     textarea.wrap = 'off';
 
+    function updateSubtleText() {
+      if (state.rawIssues.length > 0) {
+        subtle.textContent = `${state.rawIssues.length} structural issue${state.rawIssues.length !== 1 ? 's' : ''} — fix here to re-enable Visual`;
+      } else if (hasPendingRawChanges()) {
+        subtle.textContent = 'Raw text is structurally valid — apply to update Visual';
+      } else {
+        subtle.textContent = 'Editable raw mode — apply changes to update Visual';
+      }
+    }
+
     function syncEditorDecorations() {
       const lineCount = Math.max(1, textarea.value.split('\n').length);
       gutterLines.textContent = Array.from({ length: lineCount }, (_, index) => String(index + 1)).join('\n');
@@ -1797,23 +1800,9 @@
       highlightLayer.innerHTML = buildRawHighlightHtml(
         textarea.value,
         state.rawIssues,
-        !hasPendingRawChanges()
+        state.rawIssues.length > 0
       );
     }
-
-    textarea.addEventListener('input', () => {
-      state.rawText = textarea.value;
-      syncEditorDecorations();
-    });
-    textarea.addEventListener('scroll', () => {
-      gutter.scrollTop = textarea.scrollTop;
-      highlightLayer.scrollTop = textarea.scrollTop;
-      highlightLayer.scrollLeft = textarea.scrollLeft;
-    });
-    editorPane.appendChild(textarea);
-    editorShell.appendChild(editorPane);
-    body.appendChild(editorShell);
-    syncEditorDecorations();
 
     const actions = document.createElement('div');
     actions.className = 'action-row';
@@ -1831,36 +1820,40 @@
     revert.type = 'button';
     revert.className = 'mini-btn mini-btn-muted';
     revert.textContent = 'Revert to Last Applied';
-    revert.disabled = !hasPendingRawChanges();
     revert.addEventListener('click', () => {
       state.rawText = state.lastAppliedRawText;
       render();
     });
     actions.appendChild(revert);
-    body.appendChild(actions);
 
     const status = document.createElement('div');
-    status.className = `raw-status ${state.rawIssues.length > 0 ? 'error' : hasPendingRawChanges() ? 'warning' : 'success'}`;
-    if (state.rawIssues.length > 0) {
-      status.textContent = 'Visual is locked until the raw document becomes structurally valid.';
-    } else if (hasPendingRawChanges()) {
-      status.textContent = 'Raw edits are pending. Apply them to validate and update Visual.';
-    } else {
-      status.textContent = 'Raw text is structurally valid. You can switch back to Visual.';
+
+    const diagnostics = document.createElement('div');
+    diagnostics.className = 'raw-diagnostics';
+
+    const diagTitle = document.createElement('div');
+    diagTitle.className = 'raw-diagnostics-title';
+    diagTitle.textContent = 'Structural diagnostics';
+    diagnostics.appendChild(diagTitle);
+
+    const list = document.createElement('div');
+    list.className = 'raw-issue-list';
+    diagnostics.appendChild(list);
+
+    function updateStatusText() {
+      status.className = `raw-status ${state.rawIssues.length > 0 ? 'error' : hasPendingRawChanges() ? 'warning' : 'success'}`;
+      if (state.rawIssues.length > 0) {
+        status.textContent = 'Visual is locked until the raw document becomes structurally valid.';
+      } else if (hasPendingRawChanges()) {
+        status.textContent = 'Raw text is structurally valid. Apply to update Visual.';
+      } else {
+        status.textContent = 'Raw text is structurally valid. You can switch back to Visual.';
+      }
     }
-    body.appendChild(status);
 
-    if (state.rawIssues.length > 0) {
-      const diagnostics = document.createElement('div');
-      diagnostics.className = 'raw-diagnostics';
-
-      const diagTitle = document.createElement('div');
-      diagTitle.className = 'raw-diagnostics-title';
-      diagTitle.textContent = 'Structural diagnostics';
-      diagnostics.appendChild(diagTitle);
-
-      const list = document.createElement('div');
-      list.className = 'raw-issue-list';
+    function updateDiagnosticsList() {
+      diagnostics.classList.toggle('hidden', state.rawIssues.length === 0);
+      list.replaceChildren();
       for (const issue of state.rawIssues) {
         const item = document.createElement('div');
         item.className = 'raw-issue-item';
@@ -1872,9 +1865,35 @@
 
         list.appendChild(item);
       }
-      diagnostics.appendChild(list);
-      body.appendChild(diagnostics);
     }
+
+    function updateRawDraftFeedback() {
+      const analysis = analyzeRawDocument(textarea.value);
+      state.rawIssues = analysis.issues;
+      updateSubtleText();
+      updateStatusText();
+      updateDiagnosticsList();
+      revert.disabled = !hasPendingRawChanges();
+      syncEditorDecorations();
+    }
+
+    textarea.addEventListener('input', () => {
+      state.rawText = textarea.value;
+      updateRawDraftFeedback();
+    });
+    textarea.addEventListener('scroll', () => {
+      gutter.scrollTop = textarea.scrollTop;
+      highlightLayer.scrollTop = textarea.scrollTop;
+      highlightLayer.scrollLeft = textarea.scrollLeft;
+    });
+    editorPane.appendChild(textarea);
+    editorShell.appendChild(editorPane);
+    body.appendChild(editorShell);
+    body.appendChild(actions);
+    body.appendChild(status);
+    body.appendChild(diagnostics);
+
+    updateRawDraftFeedback();
 
     card.appendChild(body);
     container.appendChild(card);
