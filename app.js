@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.3.0-mvp1.7';
+  const APP_VERSION = 'v0.3.0-mvp1.10';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -44,9 +44,9 @@
     historyFuture: [],
     pendingHistory: null,
     rawText: '',
-    lastAppliedRawText: '',
     lastSavedRawText: '',
     rawIssues: [],
+    rawEditorView: null,
   };
 
   function generateId() {
@@ -674,16 +674,27 @@
     return state.rawText ?? '';
   }
 
-  function hasPendingRawChanges() {
-    return getCurrentRawText() !== state.lastAppliedRawText;
-  }
-
   function canUseVisualEditor() {
-    return !!state.doc && state.rawIssues.length === 0 && !hasPendingRawChanges();
+    return !!state.doc && state.rawIssues.length === 0;
   }
 
   function canExportCurrentDocument() {
     return canUseVisualEditor();
+  }
+
+  function snapshotRawEditorView(textarea) {
+    return {
+      scrollTop: textarea.scrollTop,
+      scrollLeft: textarea.scrollLeft,
+      selectionStart: textarea.selectionStart ?? 0,
+      selectionEnd: textarea.selectionEnd ?? 0,
+      wasFocused: document.activeElement === textarea,
+    };
+  }
+
+  function syncRawTextToCanonicalDoc() {
+    if (!state.doc || state.rawIssues.length > 0) return;
+    state.rawText = serializeDocument(state.doc);
   }
 
   function getCurrentDocSnapshot() {
@@ -743,7 +754,6 @@
     if (syncRawText) {
       const nextRawText = rawTextOverride ?? serializeDocument(doc);
       state.rawText = nextRawText;
-      state.lastAppliedRawText = nextRawText;
       state.rawIssues = [];
     }
   }
@@ -753,7 +763,6 @@
     state.doc = { preamble, root: [] };
     state.preambleVal = preamble;
     state.rawText = rawText;
-    state.lastAppliedRawText = rawText;
     state.rawIssues = issues;
     state.showRaw = true;
     state.showExport = false;
@@ -813,7 +822,7 @@
     commitPendingHistory();
     const nextRawText = rawTextOverride ?? serializeDocument(doc);
 
-    if (state.doc && docsEqual(state.doc, doc) && state.rawIssues.length === 0 && state.lastAppliedRawText === nextRawText) return;
+    if (state.doc && docsEqual(state.doc, doc) && state.rawIssues.length === 0 && state.rawText === nextRawText) return;
     if (recordHistory && state.doc) {
       pushHistorySnapshot(state.doc);
       state.historyFuture = [];
@@ -868,6 +877,24 @@
     loadInvalidRawState(text, analysis.issues, analysis.preamble);
     if (markSaved) markCurrentStateAsSaved();
     return false;
+  }
+
+  function syncRawDraftState(text) {
+    const analysis = analyzeRawDocument(text);
+    state.rawText = text;
+    state.rawIssues = analysis.issues;
+
+    if (analysis.isValid) {
+      state.doc = analysis.doc;
+      state.preambleVal = analysis.doc.preamble;
+      state.collapsed = buildInitialCollapsedState(analysis.doc);
+    } else if (!state.doc) {
+      state.doc = { preamble: analysis.preamble, root: [] };
+      state.preambleVal = analysis.preamble;
+      state.collapsed = {};
+    }
+
+    return analysis;
   }
 
   function isEditableTarget(target) {
@@ -1536,11 +1563,13 @@
     const rawBtn = btn(rawBtnLabel, {
       className: `btn ${state.showRaw ? 'btn-toggle-active' : ''}`,
       title: state.showRaw && !canUseVisualEditor()
-        ? 'Apply valid raw text to re-enable Visual.'
+        ? 'Fix raw errors to re-enable Visual.'
         : undefined,
       onClick: () => {
         if (state.showRaw) {
           if (!canUseVisualEditor()) return;
+          syncRawTextToCanonicalDoc();
+          state.rawEditorView = null;
           state.showRaw = false;
         } else {
           state.showRaw = true;
@@ -1571,7 +1600,9 @@
       },
     });
     exportBtn.disabled = !canExportCurrentDocument();
-    if (!canExportCurrentDocument()) exportBtn.title = 'Fix and apply raw text before exporting.';
+    if (!canExportCurrentDocument()) {
+      exportBtn.title = 'Fix raw errors before exporting.';
+    }
     toolbar.appendChild(exportBtn);
 
     inner.appendChild(toolbar);
@@ -1784,10 +1815,8 @@
     function updateSubtleText() {
       if (state.rawIssues.length > 0) {
         subtle.textContent = `${state.rawIssues.length} structural issue${state.rawIssues.length !== 1 ? 's' : ''} — fix here to re-enable Visual`;
-      } else if (hasPendingRawChanges()) {
-        subtle.textContent = 'Raw text is structurally valid — apply to update Visual';
       } else {
-        subtle.textContent = 'Editable raw mode — apply changes to update Visual';
+        subtle.textContent = 'Editable raw mode — Visual is unlocked while the structure remains valid';
       }
     }
 
@@ -1804,28 +1833,6 @@
       );
     }
 
-    const actions = document.createElement('div');
-    actions.className = 'action-row';
-
-    const apply = document.createElement('button');
-    apply.type = 'button';
-    apply.className = 'mini-btn mini-btn-primary';
-    apply.textContent = 'Apply Raw Changes';
-    apply.addEventListener('click', () => {
-      applyRawText(textarea.value);
-    });
-    actions.appendChild(apply);
-
-    const revert = document.createElement('button');
-    revert.type = 'button';
-    revert.className = 'mini-btn mini-btn-muted';
-    revert.textContent = 'Revert to Last Applied';
-    revert.addEventListener('click', () => {
-      state.rawText = state.lastAppliedRawText;
-      render();
-    });
-    actions.appendChild(revert);
-
     const status = document.createElement('div');
 
     const diagnostics = document.createElement('div');
@@ -1841,13 +1848,11 @@
     diagnostics.appendChild(list);
 
     function updateStatusText() {
-      status.className = `raw-status ${state.rawIssues.length > 0 ? 'error' : hasPendingRawChanges() ? 'warning' : 'success'}`;
+      status.className = `raw-status ${state.rawIssues.length > 0 ? 'error' : 'success'}`;
       if (state.rawIssues.length > 0) {
         status.textContent = 'Visual is locked until the raw document becomes structurally valid.';
-      } else if (hasPendingRawChanges()) {
-        status.textContent = 'Raw text is structurally valid. Apply to update Visual.';
       } else {
-        status.textContent = 'Raw text is structurally valid. You can switch back to Visual.';
+        status.textContent = 'Raw text is structurally valid. Visual is unlocked.';
       }
     }
 
@@ -1867,19 +1872,25 @@
       }
     }
 
-    function updateRawDraftFeedback() {
-      const analysis = analyzeRawDocument(textarea.value);
-      state.rawIssues = analysis.issues;
+    function updateRawDraftFeedback(preservedView = null) {
+      const wasVisualAvailable = canUseVisualEditor();
+      syncRawDraftState(textarea.value);
       updateSubtleText();
       updateStatusText();
       updateDiagnosticsList();
-      revert.disabled = !hasPendingRawChanges();
       syncEditorDecorations();
+      const isVisualAvailable = canUseVisualEditor();
+      if (wasVisualAvailable !== isVisualAvailable) {
+        state.rawEditorView = preservedView;
+        render();
+        return;
+      }
     }
 
     textarea.addEventListener('input', () => {
       state.rawText = textarea.value;
-      updateRawDraftFeedback();
+      const view = snapshotRawEditorView(textarea);
+      updateRawDraftFeedback(view);
     });
     textarea.addEventListener('scroll', () => {
       gutter.scrollTop = textarea.scrollTop;
@@ -1889,11 +1900,30 @@
     editorPane.appendChild(textarea);
     editorShell.appendChild(editorPane);
     body.appendChild(editorShell);
-    body.appendChild(actions);
     body.appendChild(status);
     body.appendChild(diagnostics);
 
     updateRawDraftFeedback();
+
+    if (state.rawEditorView) {
+      const view = state.rawEditorView;
+      state.rawEditorView = null;
+      requestAnimationFrame(() => {
+        textarea.scrollTop = view.scrollTop;
+        textarea.scrollLeft = view.scrollLeft;
+        gutter.scrollTop = view.scrollTop;
+        highlightLayer.scrollTop = view.scrollTop;
+        highlightLayer.scrollLeft = view.scrollLeft;
+        if (view.wasFocused) {
+          textarea.focus({ preventScroll: true });
+          const max = textarea.value.length;
+          textarea.setSelectionRange(
+            Math.min(view.selectionStart, max),
+            Math.min(view.selectionEnd, max)
+          );
+        }
+      });
+    }
 
     card.appendChild(body);
     container.appendChild(card);
