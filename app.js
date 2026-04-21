@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.4.2';
+  const APP_VERSION = 'v0.4.3';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -49,6 +49,7 @@
     lastSavedRawText: '',
     rawIssues: [],
     rawEditorView: null,
+    fileInputEl: null,
   };
 
   function generateId() {
@@ -917,6 +918,20 @@
   }
 
   function handleGlobalKeydown(event) {
+    if (event.key === 'Escape' && state.showAbout) {
+      event.preventDefault();
+      state.showAbout = false;
+      render();
+      return;
+    }
+
+    if (event.key === 'F1' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      toggleHelpDocs();
+      render();
+      return;
+    }
+
     if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
     if (isEditableTarget(event.target)) return;
 
@@ -927,6 +942,29 @@
     } else if (key === 'y' || (key === 'z' && event.shiftKey)) {
       event.preventDefault();
       redo();
+    } else if (key === 'n' && !event.shiftKey) {
+      event.preventDefault();
+      createNewDocument();
+      render();
+    } else if (key === 'o' && !event.shiftKey) {
+      event.preventDefault();
+      openFilePicker();
+    } else if (key === 's' && event.shiftKey) {
+      event.preventDefault();
+      openSaveAsDialog();
+      render();
+    } else if (key === 'e' && !event.shiftKey) {
+      event.preventDefault();
+      activateVisualMode();
+      render();
+    } else if (key === 'r' && !event.shiftKey) {
+      event.preventDefault();
+      activateRawMode();
+      render();
+    } else if (key === 'i' && !event.shiftKey) {
+      event.preventDefault();
+      openAboutDialog();
+      render();
     }
   }
 
@@ -1099,6 +1137,52 @@
     if (event.target.closest('.menu')) return;
     closeMenus();
     render();
+  }
+
+  function createNewDocument() {
+    if (!window.confirm('Start a new document? Unsaved changes will be lost.')) return false;
+    state.showRaw = false;
+    state.preambleEditing = false;
+    const nextRaw = '# New Prompt\n\n<prompt>\n  \n</prompt>';
+    applyRawText(nextRaw);
+    return true;
+  }
+
+  function openFilePicker() {
+    if (!state.fileInputEl) return false;
+    state.fileInputEl.click();
+    return true;
+  }
+
+  function openSaveAsDialog() {
+    if (!canExportCurrentDocument()) return false;
+    state.showExport = true;
+    state.copied = false;
+    return true;
+  }
+
+  function activateVisualMode() {
+    if (!state.showRaw || !canUseVisualEditor()) return false;
+    syncRawTextToCanonicalDoc();
+    state.rawEditorView = null;
+    state.showRaw = false;
+    return true;
+  }
+
+  function activateRawMode() {
+    if (state.showRaw) return false;
+    state.showRaw = true;
+    return true;
+  }
+
+  function toggleHelpDocs() {
+    state.showHelp = !state.showHelp;
+    return true;
+  }
+
+  function openAboutDialog() {
+    state.showAbout = true;
+    return true;
   }
 
   function renderTagEditor(node, nodes, container) {
@@ -1530,6 +1614,7 @@
     input.type = 'file';
     input.accept = '.md,.txt,.xml';
     input.className = 'hidden';
+    state.fileInputEl = input;
     input.addEventListener('change', (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -1559,27 +1644,20 @@
         items: [
           {
             label: 'New',
-            action: () => {
-              if (!window.confirm('Start a new document? Unsaved changes will be lost.')) return;
-              state.showRaw = false;
-              state.preambleEditing = false;
-              const nextRaw = '# New Prompt\n\n<prompt>\n  \n</prompt>';
-              applyRawText(nextRaw);
-            },
+            shortcut: 'Ctrl+N',
+            action: () => createNewDocument(),
           },
           {
             label: 'Open',
-            action: () => openBtn.click(),
+            shortcut: 'Ctrl+O',
+            action: () => openFilePicker(),
           },
           {
             label: 'Save as...',
+            shortcut: 'Ctrl+Shift+S',
             disabled: !canExportCurrentDocument(),
             title: !canExportCurrentDocument() ? 'Fix raw errors before saving.' : undefined,
-            action: () => {
-              if (!canExportCurrentDocument()) return;
-              state.showExport = true;
-              state.copied = false;
-            },
+            action: () => openSaveAsDialog(),
           },
         ],
       },
@@ -1589,22 +1667,16 @@
         items: [
           {
             label: 'Visual',
+            shortcut: 'Ctrl+E',
             disabled: !state.showRaw || !canUseVisualEditor(),
             title: !canUseVisualEditor() ? 'Fix raw errors to re-enable Visual.' : undefined,
-            action: () => {
-              if (!state.showRaw || !canUseVisualEditor()) return;
-              syncRawTextToCanonicalDoc();
-              state.rawEditorView = null;
-              state.showRaw = false;
-            },
+            action: () => activateVisualMode(),
           },
           {
             label: 'Raw',
+            shortcut: 'Ctrl+R',
             disabled: state.showRaw,
-            action: () => {
-              if (state.showRaw) return;
-              state.showRaw = true;
-            },
+            action: () => activateRawMode(),
           },
         ],
       },
@@ -1614,15 +1686,13 @@
         items: [
           {
             label: 'Doc',
-            action: () => {
-              state.showHelp = !state.showHelp;
-            },
+            shortcut: 'F1',
+            action: () => toggleHelpDocs(),
           },
           {
             label: 'About',
-            action: () => {
-              state.showAbout = true;
-            },
+            shortcut: 'Ctrl+I',
+            action: () => openAboutDialog(),
           },
         ],
       },
@@ -1630,7 +1700,7 @@
 
     for (const menuConfig of menuConfigs) {
       const menu = document.createElement('div');
-      menu.className = 'menu';
+      menu.className = `menu menu-${menuConfig.key}`;
 
       const menuBtn = document.createElement('button');
       menuBtn.type = 'button';
@@ -1649,9 +1719,21 @@
           const itemBtn = document.createElement('button');
           itemBtn.type = 'button';
           itemBtn.className = 'menu-item';
-          itemBtn.textContent = item.label;
           itemBtn.disabled = !!item.disabled;
           if (item.title) itemBtn.title = item.title;
+
+          const label = document.createElement('span');
+          label.className = 'menu-item-label';
+          label.textContent = item.label;
+          itemBtn.appendChild(label);
+
+          if (item.shortcut) {
+            const shortcut = document.createElement('span');
+            shortcut.className = 'menu-shortcut';
+            shortcut.textContent = item.shortcut;
+            itemBtn.appendChild(shortcut);
+          }
+
           itemBtn.addEventListener('click', () => {
             if (item.disabled) return;
             closeMenus();

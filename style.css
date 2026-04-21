@@ -157,6 +157,11 @@ button:disabled {
   font-size: 14px;
   line-height: 1.2;
   transition: background .15s ease, color .15s ease;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
 .menu-item:hover {
@@ -167,6 +172,23 @@ button:disabled {
 .menu-item:disabled {
   color: #94a3b8;
   background: transparent;
+}
+
+.menu-item-label {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.menu-shortcut {
+  color: #94a3b8;
+  font-size: 12px;
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.menu-file .menu-dropdown {
+  min-width: 220px;
+  width: max-content;
 }
 
 .topbar-title {
