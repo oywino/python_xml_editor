@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.4.0';
+  const APP_VERSION = 'v0.4.2';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -38,6 +38,8 @@
     preambleEditing: false,
     preambleVal: '',
     showHelp: false,
+    showAbout: false,
+    openMenu: null,
     collapsed: {},
     dragNodeId: null,
     historyPast: [],
@@ -1088,6 +1090,17 @@
     return b;
   }
 
+  function closeMenus() {
+    state.openMenu = null;
+  }
+
+  function handleGlobalPointerDown(event) {
+    if (!state.openMenu) return;
+    if (event.target.closest('.menu')) return;
+    closeMenus();
+    render();
+  }
+
   function renderTagEditor(node, nodes, container) {
     const wrap = document.createElement('div');
     wrap.style.display = 'flex';
@@ -1504,48 +1517,15 @@
     const inner = document.createElement('div');
     inner.className = 'topbar-inner';
 
-    const brand = document.createElement('div');
-    brand.className = 'brand';
+    const left = document.createElement('div');
+    left.className = 'topbar-left';
+
     const iconBox = document.createElement('div');
     iconBox.className = 'brand-icon';
     iconBox.textContent = '</>';
-    brand.appendChild(iconBox);
+    left.appendChild(iconBox);
 
-    const brandText = document.createElement('div');
-    brandText.className = 'brand-text';
-    const title = document.createElement('div');
-    title.className = 'brand-title';
-    title.textContent = 'XML Prompt Editor';
-    brandText.appendChild(title);
-
-    const version = document.createElement('div');
-    version.className = 'brand-version';
-    version.textContent = APP_VERSION;
-    brandText.appendChild(version);
-
-    brand.appendChild(brandText);
-    inner.appendChild(brand);
-
-    const spacer = document.createElement('div');
-    spacer.className = 'spacer';
-    inner.appendChild(spacer);
-
-    const toolbar = document.createElement('div');
-    toolbar.className = 'toolbar';
-
-    const newBtn = btn('New', {
-      className: 'btn',
-      onClick: () => {
-        if (!window.confirm('Start a new document? Unsaved changes will be lost.')) return;
-        state.showRaw = false;
-        state.preambleEditing = false;
-        const nextRaw = '# New Prompt\n\n<prompt>\n  \n</prompt>';
-        applyRawText(nextRaw);
-      },
-    });
-    toolbar.appendChild(newBtn);
-
-    const openBtn = btn('Open File', { className: 'btn' });
+    const openBtn = btn('Open File', { className: 'btn hidden' });
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.md,.txt,.xml';
@@ -1566,58 +1546,138 @@
       input.value = '';
     });
     openBtn.addEventListener('click', () => input.click());
-    toolbar.appendChild(openBtn);
-    toolbar.appendChild(input);
+    left.appendChild(openBtn);
+    left.appendChild(input);
 
-    const rawBtnLabel = state.showRaw
-      ? (canUseVisualEditor() ? 'Visual' : 'Visual locked')
-      : 'Raw';
-    const rawBtn = btn(rawBtnLabel, {
-      className: `btn ${state.showRaw ? 'btn-toggle-active' : ''}`,
-      title: state.showRaw && !canUseVisualEditor()
-        ? 'Fix raw errors to re-enable Visual.'
-        : undefined,
-      onClick: () => {
-        if (state.showRaw) {
-          if (!canUseVisualEditor()) return;
-          syncRawTextToCanonicalDoc();
-          state.rawEditorView = null;
-          state.showRaw = false;
-        } else {
-          state.showRaw = true;
+    const menuBar = document.createElement('div');
+    menuBar.className = 'menu-bar';
+
+    const menuConfigs = [
+      {
+        key: 'file',
+        label: 'File',
+        items: [
+          {
+            label: 'New',
+            action: () => {
+              if (!window.confirm('Start a new document? Unsaved changes will be lost.')) return;
+              state.showRaw = false;
+              state.preambleEditing = false;
+              const nextRaw = '# New Prompt\n\n<prompt>\n  \n</prompt>';
+              applyRawText(nextRaw);
+            },
+          },
+          {
+            label: 'Open',
+            action: () => openBtn.click(),
+          },
+          {
+            label: 'Save as...',
+            disabled: !canExportCurrentDocument(),
+            title: !canExportCurrentDocument() ? 'Fix raw errors before saving.' : undefined,
+            action: () => {
+              if (!canExportCurrentDocument()) return;
+              state.showExport = true;
+              state.copied = false;
+            },
+          },
+        ],
+      },
+      {
+        key: 'edit',
+        label: 'Edit',
+        items: [
+          {
+            label: 'Visual',
+            disabled: !state.showRaw || !canUseVisualEditor(),
+            title: !canUseVisualEditor() ? 'Fix raw errors to re-enable Visual.' : undefined,
+            action: () => {
+              if (!state.showRaw || !canUseVisualEditor()) return;
+              syncRawTextToCanonicalDoc();
+              state.rawEditorView = null;
+              state.showRaw = false;
+            },
+          },
+          {
+            label: 'Raw',
+            disabled: state.showRaw,
+            action: () => {
+              if (state.showRaw) return;
+              state.showRaw = true;
+            },
+          },
+        ],
+      },
+      {
+        key: 'help',
+        label: 'Help',
+        items: [
+          {
+            label: 'Doc',
+            action: () => {
+              state.showHelp = !state.showHelp;
+            },
+          },
+          {
+            label: 'About',
+            action: () => {
+              state.showAbout = true;
+            },
+          },
+        ],
+      },
+    ];
+
+    for (const menuConfig of menuConfigs) {
+      const menu = document.createElement('div');
+      menu.className = 'menu';
+
+      const menuBtn = document.createElement('button');
+      menuBtn.type = 'button';
+      menuBtn.className = `menu-btn ${state.openMenu === menuConfig.key ? 'menu-btn-open' : ''}`;
+      menuBtn.textContent = menuConfig.label;
+      menuBtn.addEventListener('click', () => {
+        state.openMenu = state.openMenu === menuConfig.key ? null : menuConfig.key;
+        render();
+      });
+      menu.appendChild(menuBtn);
+
+      if (state.openMenu === menuConfig.key) {
+        const dropdown = document.createElement('div');
+        dropdown.className = 'menu-dropdown';
+        for (const item of menuConfig.items) {
+          const itemBtn = document.createElement('button');
+          itemBtn.type = 'button';
+          itemBtn.className = 'menu-item';
+          itemBtn.textContent = item.label;
+          itemBtn.disabled = !!item.disabled;
+          if (item.title) itemBtn.title = item.title;
+          itemBtn.addEventListener('click', () => {
+            if (item.disabled) return;
+            closeMenus();
+            item.action();
+            render();
+          });
+          dropdown.appendChild(itemBtn);
         }
-        render();
-      },
-    });
-    rawBtn.disabled = state.showRaw && !canUseVisualEditor();
-    toolbar.appendChild(rawBtn);
+        menu.appendChild(dropdown);
+      }
 
-    const helpBtn = btn('Help', {
-      className: 'btn',
-      title: 'Help',
-      onClick: () => {
-        state.showHelp = !state.showHelp;
-        render();
-      },
-    });
-    toolbar.appendChild(helpBtn);
-
-    const exportBtn = btn('Save', {
-      className: 'btn btn-primary',
-      onClick: () => {
-        if (!canExportCurrentDocument()) return;
-        state.showExport = true;
-        state.copied = false;
-        render();
-      },
-    });
-    exportBtn.disabled = !canExportCurrentDocument();
-    if (!canExportCurrentDocument()) {
-      exportBtn.title = 'Fix raw errors before saving.';
+      menuBar.appendChild(menu);
     }
-    toolbar.appendChild(exportBtn);
 
-    inner.appendChild(toolbar);
+    left.appendChild(menuBar);
+    inner.appendChild(left);
+
+    const centeredTitle = document.createElement('div');
+    centeredTitle.className = 'topbar-title';
+    centeredTitle.textContent = 'XML Editor';
+    inner.appendChild(centeredTitle);
+
+    const right = document.createElement('div');
+    right.className = 'topbar-right';
+    inner.appendChild(right);
+
     topbar.appendChild(inner);
     root.appendChild(topbar);
   }
@@ -2064,6 +2124,78 @@
     root.appendChild(backdrop);
   }
 
+  function renderAboutModal(root) {
+    if (!state.showAbout) return;
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) {
+        state.showAbout = false;
+        render();
+      }
+    });
+
+    const modal = document.createElement('div');
+    modal.className = 'modal about-modal';
+
+    const header = document.createElement('div');
+    header.className = 'modal-header';
+    const left = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'modal-title';
+    title.textContent = 'About XML Editor';
+    left.appendChild(title);
+    const subtitle = document.createElement('div');
+    subtitle.className = 'modal-subtitle';
+    subtitle.textContent = `Version ${APP_VERSION}`;
+    left.appendChild(subtitle);
+    header.appendChild(left);
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'close-btn';
+    close.textContent = '×';
+    close.addEventListener('click', () => {
+      state.showAbout = false;
+      render();
+    });
+    header.appendChild(close);
+    modal.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'about-body';
+
+    const intro = document.createElement('p');
+    intro.className = 'about-copy';
+    intro.textContent = 'XML Editor is a lightweight local prompt editor for documents that combine a free-form preamble with an XML body.';
+    body.appendChild(intro);
+
+    const details = document.createElement('div');
+    details.className = 'about-details';
+
+    const rows = [
+      ['Version', APP_VERSION],
+      ['Mode', 'Local browser app'],
+      ['Storage', 'In-memory browser session'],
+    ];
+
+    for (const [label, value] of rows) {
+      const row = document.createElement('div');
+      const strong = document.createElement('strong');
+      strong.textContent = label;
+      row.appendChild(strong);
+      const span = document.createElement('span');
+      span.textContent = value;
+      row.appendChild(span);
+      details.appendChild(row);
+    }
+
+    body.appendChild(details);
+    modal.appendChild(body);
+    backdrop.appendChild(modal);
+    root.appendChild(backdrop);
+  }
+
   function render() {
     if (!state.showRaw && !canUseVisualEditor()) {
       state.showRaw = true;
@@ -2089,6 +2221,7 @@
     main.appendChild(mainInner);
     shell.appendChild(main);
     renderExportModal(shell);
+    renderAboutModal(shell);
     app.appendChild(shell);
   }
 
@@ -2119,6 +2252,7 @@
     state.collapsed = buildInitialCollapsedState(state.doc);
     markCurrentStateAsSaved();
     window.addEventListener('keydown', handleGlobalKeydown);
+    document.addEventListener('mousedown', handleGlobalPointerDown);
     window.addEventListener('beforeunload', handleBeforeUnload);
     startHeartbeat();
     render();
