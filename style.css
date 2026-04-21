@@ -436,15 +436,16 @@ button:disabled {
 }
 
 .node-row {
-  margin-bottom: 4px;
+  margin-bottom: 10px;
 }
 
 .element-frame {
+  position: relative;
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 14px;
   transition: border-color .15s ease, box-shadow .15s ease, opacity .15s ease, background .15s ease;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .element-frame:hover {
@@ -473,15 +474,51 @@ button:disabled {
 }
 
 .drag-over-before {
-  box-shadow: inset 0 3px 0 #2563eb, 0 0 0 3px rgba(59,130,246,.12);
+  box-shadow: 0 0 0 3px rgba(59,130,246,.12);
 }
 
 .drag-over-after {
-  box-shadow: inset 0 -3px 0 #2563eb, 0 0 0 3px rgba(59,130,246,.12);
+  box-shadow: 0 0 0 3px rgba(59,130,246,.12);
 }
 
 .drag-over-child {
   box-shadow: 0 0 0 3px rgba(59,130,246,.12);
+}
+
+.drag-over-before::before,
+.drag-over-after::after {
+  content: '';
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(37,99,235,.18), rgba(37,99,235,.9), rgba(37,99,235,.18));
+  box-shadow:
+    0 0 0 1px rgba(191, 219, 254, 0.95),
+    0 0 0 6px rgba(59,130,246,.10),
+    0 6px 18px rgba(37,99,235,.22);
+  animation: drop-gap-pulse .9s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.drag-over-before::before {
+  top: -8px;
+}
+
+.drag-over-after::after {
+  bottom: -8px;
+}
+
+@keyframes drop-gap-pulse {
+  0%, 100% {
+    opacity: .72;
+    transform: scaleX(.985);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
 }
 
 .element-frame-header,

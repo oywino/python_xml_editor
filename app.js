@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.5.1';
+  const APP_VERSION = 'v0.5.2';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -42,6 +42,7 @@
     openMenu: null,
     collapsed: {},
     dragNodeId: null,
+    dragLatchedIndicator: null,
     historyPast: [],
     historyFuture: [],
     pendingHistory: null,
@@ -628,7 +629,7 @@
     const sameParent = draggedContext.parentId === targetContext.parentId;
     const relativeY = clientY - rect.top;
     const edgeBand = Math.min(Math.max(rect.height * 0.25, 18), 40);
-    const leftBand = Math.min(Math.max(rect.width * 0.18, 56), 88);
+    const leftBand = Math.min(Math.max(rect.width * 0.06, 20), 32);
     const relativeX = clientX - rect.left;
 
     if (draggedNode && draggedNode.parent && relativeX <= leftBand) {
@@ -639,6 +640,8 @@
             mode: 'after',
             parentId: targetContext.parentId,
             index: targetIndex + 1,
+            indicatorNodeId: targetNode.id,
+            outdent: true,
           };
         }
       }
@@ -647,10 +650,13 @@
         child.id === draggedNode.parent || isDescendant(child, draggedNode.parent)
       ));
       if (targetChildIndex !== -1) {
+        const anchorChild = targetNode.children[targetChildIndex];
         return {
-          mode: 'child',
+          mode: 'after',
           parentId: targetNode.id,
           index: targetChildIndex + 1,
+          indicatorNodeId: anchorChild?.id,
+          outdent: true,
         };
       }
     }
@@ -1159,6 +1165,27 @@
     state.openMenu = null;
   }
 
+  function clearAllDragIndicators() {
+    document.querySelectorAll('.drag-over, .drag-over-before, .drag-over-after, .drag-over-child').forEach((el) => {
+      el.classList.remove('drag-over', 'drag-over-before', 'drag-over-after', 'drag-over-child');
+    });
+  }
+
+  function clearLatchedDragIndicator() {
+    state.dragLatchedIndicator = null;
+    clearAllDragIndicators();
+  }
+
+  function applyLatchedDragIndicator(target) {
+    state.dragLatchedIndicator = target;
+    clearAllDragIndicators();
+    const indicatorEl = target?.indicatorNodeId
+      ? document.querySelector(`[data-node-id="${target.indicatorNodeId}"]`)
+      : null;
+    if (!indicatorEl || !target?.mode) return;
+    indicatorEl.classList.add('drag-over', `drag-over-${target.mode}`);
+  }
+
   function handleGlobalPointerDown(event) {
     if (!state.openMenu) return;
     if (event.target.closest('.menu')) return;
@@ -1357,6 +1384,7 @@
 
     const frame = document.createElement('div');
     frame.className = 'element-frame';
+    frame.dataset.nodeId = node.id;
     const clearDropClasses = () => frame.classList.remove('drag-over', 'drag-over-before', 'drag-over-after', 'drag-over-child');
     const applyDropClasses = (mode) => {
       clearDropClasses();
@@ -1375,17 +1403,18 @@
     let dragDepth = 0;
     card.addEventListener('dragstart', (e) => {
       state.dragNodeId = node.id;
+      state.dragLatchedIndicator = null;
+      clearAllDragIndicators();
       frame.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', node.id);
     });
     card.addEventListener('dragend', () => {
       state.dragNodeId = null;
+      state.dragLatchedIndicator = null;
       dragDepth = 0;
       frame.classList.remove('dragging');
-      document.querySelectorAll('.drag-over, .drag-over-before, .drag-over-after, .drag-over-child').forEach((el) => {
-        el.classList.remove('drag-over', 'drag-over-before', 'drag-over-after', 'drag-over-child');
-      });
+      clearAllDragIndicators();
     });
 
     frame.addEventListener('dragenter', (e) => {
@@ -1393,23 +1422,34 @@
       if (!state.dragNodeId || state.dragNodeId === node.id) return;
       dragDepth += 1;
       const target = getDropTarget(nodes, state.dragNodeId, node, e.clientX, e.clientY, frame.getBoundingClientRect());
-      applyDropClasses(target?.mode);
+      if (target?.outdent) {
+        applyLatchedDragIndicator(target);
+      } else {
+        if (state.dragLatchedIndicator) state.dragLatchedIndicator = null;
+        applyDropClasses(target?.mode);
+      }
     });
     frame.addEventListener('dragover', (e) => {
       e.preventDefault();
       if (!state.dragNodeId || state.dragNodeId === node.id) return;
       const target = getDropTarget(nodes, state.dragNodeId, node, e.clientX, e.clientY, frame.getBoundingClientRect());
-      applyDropClasses(target?.mode);
+      if (target?.outdent) {
+        applyLatchedDragIndicator(target);
+      } else {
+        if (state.dragLatchedIndicator) state.dragLatchedIndicator = null;
+        applyDropClasses(target?.mode);
+      }
     });
     frame.addEventListener('dragleave', () => {
       dragDepth = Math.max(0, dragDepth - 1);
-      if (dragDepth === 0) clearDropClasses();
+      if (dragDepth === 0 && !state.dragLatchedIndicator) clearDropClasses();
     });
     frame.addEventListener('drop', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      state.dragLatchedIndicator = null;
       dragDepth = 0;
-      clearDropClasses();
+      clearAllDragIndicators();
       const dragged = e.dataTransfer.getData('text/plain');
       const target = getDropTarget(nodes, dragged, node, e.clientX, e.clientY, frame.getBoundingClientRect());
       if (dragged && dragged !== node.id && target) {
