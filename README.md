@@ -83,7 +83,7 @@ The build script will:
 Example output:
 
 ```text
-release\XML_Prompt_Editor_v0.5.0.exe
+release\XML_Prompt_Editor_v0.5.1.exe
 ```
 
 Packaging notes:
