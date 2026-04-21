@@ -7,6 +7,7 @@ import http.server
 import os
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -19,7 +20,10 @@ try:
 except ImportError:  # pragma: no cover - Windows-only helper
     winreg = None
 
-BASE_DIR = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    BASE_DIR = Path(sys._MEIPASS)
+else:
+    BASE_DIR = Path(__file__).resolve().parent
 HOST = "127.0.0.1"
 HEARTBEAT_PATH = "/__heartbeat"
 STARTUP_TIMEOUT_SECONDS = 45
@@ -54,6 +58,12 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         return
 
+    def end_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
     def do_GET(self) -> None:
         path = urllib.parse.urlparse(self.path).path
         if path != HEARTBEAT_PATH:
@@ -68,7 +78,6 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
         self.server.note_browser_activity()
         self.send_response(http.HTTPStatus.NO_CONTENT)
-        self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
 

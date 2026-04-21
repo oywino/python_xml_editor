@@ -58,6 +58,40 @@ The launcher will:
 
 Stop the server with `Ctrl+C`.
 
+## Build Windows EXE
+
+The app can be packaged as a self-contained Windows executable while keeping the current Python launcher architecture.
+
+Recommended packaging tool:
+
+```bash
+py -3 -m pip install pyinstaller
+```
+
+Then build from the repository root:
+
+```powershell
+.\build_exe.ps1
+```
+
+The build script will:
+
+1. read the current app version from `app.js`
+2. run PyInstaller directly with the bundled launcher assets
+3. create a versioned executable in `release/`
+
+Example output:
+
+```text
+release\XML_Prompt_Editor_v0.4.0.exe
+```
+
+Packaging notes:
+
+- the executable still uses the system browser
+- `index.html`, `app.js`, and `style.css` are bundled into the executable
+- `XML_Editor.py` contains a small PyInstaller compatibility path so the bundled assets can still be served correctly
+
 ## Development Workflow
 
 1. branch from `main`

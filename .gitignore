@@ -5,3 +5,6 @@ __pycache__/
 Thumbs.db
 .codex-gh/
 .git-codex/
+build/
+dist/
+release/
