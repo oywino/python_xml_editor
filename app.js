@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.6.0';
+  const APP_VERSION = 'v0.6.1';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -1869,19 +1869,8 @@
       header.className = 'card-header';
       const title = document.createElement('div');
       title.className = 'card-title';
-      title.textContent = 'PREAMBLE (MARKDOWN HEADER)';
+      title.textContent = 'PREAMBLE (TEXT BEFORE XML)';
       header.appendChild(title);
-      if (!state.preambleEditing) {
-        const edit = document.createElement('button');
-        edit.type = 'button';
-        edit.className = 'edit-link';
-        edit.textContent = 'Edit';
-        edit.addEventListener('click', () => {
-          state.preambleEditing = true;
-          render();
-        });
-        header.appendChild(edit);
-      }
       card.appendChild(header);
 
       if (state.preambleEditing) {

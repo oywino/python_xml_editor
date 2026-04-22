@@ -332,19 +332,6 @@ button:disabled {
   padding: 16px;
 }
 
-.edit-link {
-  border: 0;
-  background: transparent;
-  color: #3b82f6;
-  font-size: 12px;
-  margin-left: auto;
-  padding: 0;
-}
-
-.edit-link:hover {
-  color: #1d4ed8;
-}
-
 .add-preamble {
   width: 100%;
   text-align: left;
