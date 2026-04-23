@@ -83,7 +83,7 @@ The build script will:
 Example output:
 
 ```text
-release\XML_Prompt_Editor_v0.7.0.exe
+release\XML_Prompt_Editor_v0.7.1.exe
 ```
 
 Packaging notes:
@@ -91,6 +91,7 @@ Packaging notes:
 - the executable still uses the system browser
 - `index.html`, `app.js`, and `style.css` are bundled into the executable
 - `XML_Editor.py` contains a small PyInstaller compatibility path so the bundled assets can still be served correctly
+- packaged `.exe` builds check GitHub Releases on startup and can offer an in-place update when a newer release is available
 
 ## Development Workflow
 
