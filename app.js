@@ -22,7 +22,7 @@
   </response_format>
 </prompt>`;
 
-  const APP_VERSION = 'v0.6.1';
+  const APP_VERSION = 'v0.6.2';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -523,6 +523,24 @@
     });
   }
 
+  function collectTextNodeValues(nodes, values = new Map()) {
+    for (const node of nodes) {
+      if (node.type === 'text') values.set(node.id, node.text || '');
+      collectTextNodeValues(node.children, values);
+    }
+    return values;
+  }
+
+  function mergeTextNodeValues(nodes, values) {
+    return nodes.map((node) => {
+      const children = mergeTextNodeValues(node.children, values);
+      if (node.type === 'text' && values.has(node.id)) {
+        return { ...node, text: values.get(node.id), children };
+      }
+      return { ...node, children };
+    });
+  }
+
   function createElementNode(tag, parentId) {
     return {
       id: generateId(),
@@ -882,7 +900,8 @@
   }
 
   function updateRoot(root) {
-    setDoc({ ...state.doc, root });
+    const nextRoot = state.doc ? mergeTextNodeValues(root, collectTextNodeValues(state.doc.root)) : root;
+    setDoc({ ...state.doc, root: nextRoot });
   }
 
   function undo() {
@@ -1359,7 +1378,8 @@
     textarea.addEventListener('input', () => {
       beginPendingHistorySession(`text:${node.id}`);
       textarea.rows = Math.max(1, textarea.value ? textarea.value.split('\n').length : 1);
-      state.doc.root = updateNodeById(nodes, node.id, (n) => ({ ...n, text: textarea.value }));
+      state.doc.root = updateNodeById(state.doc.root, node.id, (n) => ({ ...n, text: textarea.value }));
+      syncRawTextToCanonicalDoc();
     });
     textarea.addEventListener('blur', () => commitPendingHistory());
     wrap.appendChild(textarea);
