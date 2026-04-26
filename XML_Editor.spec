@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='XML_Prompt_Editor',
+    name='XML_Editor',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -45,10 +45,10 @@ function Get-AppVersion {
 
 $pythonCmd = Get-PythonCommand
 $version = Get-AppVersion
-$outputName = "XML_Prompt_Editor_$version.exe"
-$distExePath = Join-Path $distDir "XML_Prompt_Editor.exe"
+$outputName = "XML_Editor_$version.exe"
+$distExePath = Join-Path $distDir "XML_Editor.exe"
 
-Write-Host "Building XML Prompt Editor $version"
+Write-Host "Building XML Editor $version"
 
 try {
   Invoke-Python -PythonCommand $pythonCmd -Arguments @("-m", "PyInstaller", "--version") | Out-Null
@@ -72,7 +72,7 @@ Invoke-Python -PythonCommand $pythonCmd -Arguments @(
   "--noconfirm",
   "--onefile",
   "--windowed",
-  "--name", "XML_Prompt_Editor",
+  "--name", "XML_Editor",
   "--add-data", ("{0}{1}." -f (Join-Path $projectRoot "index.html"), $separator),
   "--add-data", ("{0}{1}." -f (Join-Path $projectRoot "app.js"), $separator),
   "--add-data", ("{0}{1}." -f (Join-Path $projectRoot "style.css"), $separator),

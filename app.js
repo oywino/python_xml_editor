@@ -1,7 +1,7 @@
 (() => {
-  const SAMPLE_DOC = `# My AI Prompt
+  const SAMPLE_DOC = `# My XML Document
 
-<prompt>
+<document>
   <context>
     <project_name>
       My Amazing Project
@@ -20,9 +20,9 @@
   <response_format>
     Please respond in a structured, clear manner.
   </response_format>
-</prompt>`;
+</document>`;
 
-  const APP_VERSION = 'v0.8.0';
+  const APP_VERSION = 'v0.9.0';
   const HEARTBEAT_INTERVAL_MS = 5000;
   const HISTORY_LIMIT = 100;
   const TYPING_COMMIT_DELAY_MS = 800;
@@ -1216,7 +1216,7 @@
     if (!window.confirm('Start a new document? Unsaved changes will be lost.')) return false;
     state.showRaw = false;
     state.preambleEditing = false;
-    const nextRaw = '# New Prompt\n\n<prompt>\n  \n</prompt>';
+      const nextRaw = '# New Document\n\n<document>\n  \n</document>';
     applyRawText(nextRaw);
     return true;
   }
@@ -2188,7 +2188,7 @@
     const left = document.createElement('div');
     const title = document.createElement('div');
     title.className = 'modal-title';
-    title.textContent = 'Save Prompt';
+    title.textContent = 'Save File';
     left.appendChild(title);
     const subtitle = document.createElement('div');
     subtitle.className = 'modal-subtitle';
@@ -2231,7 +2231,7 @@
     const note = document.createElement('div');
     note.className = 'modal-note';
     note.textContent = state.exportMode === 'ai'
-      ? 'Clean XML output ready to paste into your AI prompt. No visual markers.'
+      ? 'Clean XML output ready to save or share. No visual markers.'
       : 'Full format including preamble — use this to reload the file for editing.';
     modal.appendChild(note);
 
@@ -2271,7 +2271,7 @@
     download.textContent = 'Save';
     download.addEventListener('click', () => {
       const ext = state.exportMode === 'ai' ? 'txt' : 'md';
-      const filename = `prompt_${state.exportMode === 'ai' ? 'ai_ready' : 'editor'}.${ext}`;
+      const filename = `xml_editor_${state.exportMode === 'ai' ? 'ai_ready' : 'editor'}.${ext}`;
       downloadText(filename, getExportContent());
       markCurrentStateAsSaved();
     });
@@ -2325,7 +2325,7 @@
 
     const intro = document.createElement('p');
     intro.className = 'about-copy';
-    intro.textContent = 'XML Editor is a lightweight local prompt editor for documents that combine a free-form preamble with an XML body.';
+  intro.textContent = 'XML Editor is a lightweight local editor for documents that combine a free-form preamble with an XML body.';
     body.appendChild(intro);
 
     const details = document.createElement('div');

@@ -1,8 +1,8 @@
 # Python XML Editor
 
-`python_xml_editor` is a local browser-based XML prompt editor with a tiny Python launcher.
+`python_xml_editor` is a local browser-based XML editor with a tiny Python launcher.
 
-It is designed for editing prompt documents that contain:
+It is designed for editing XML-based documents that contain:
 
 - a free-form preamble, such as a Markdown heading or note
 - an XML body that can be edited visually instead of by hand
@@ -12,7 +12,7 @@ The app runs entirely locally. Python serves the static files, and the browser h
 ## Features
 
 - open `.md`, `.txt`, and `.xml` files
-- edit a prompt preamble separately from the XML structure
+- edit a document preamble separately from the XML structure
 - rename tags and edit attributes inline
 - add root, child, and sibling elements
 - reorder nodes with buttons or drag-and-drop
@@ -83,7 +83,7 @@ The build script will:
 Example output:
 
 ```text
-release\XML_Prompt_Editor_v0.8.0.exe
+release\XML_Editor_v0.9.0.exe
 ```
 
 Packaging notes:
@@ -91,7 +91,7 @@ Packaging notes:
 - the executable still uses the system browser
 - `index.html`, `app.js`, and `style.css` are bundled into the executable
 - `XML_Editor.py` contains a small PyInstaller compatibility path so the bundled assets can still be served correctly
-- packaged `.exe` builds check GitHub Releases on startup and can offer an in-place update when a newer release is available
+- packaged `.exe` builds check both GitHub release channels on startup and can offer a download-and-replace update when a newer release is available
 
 ## Development Workflow
 
@@ -119,6 +119,6 @@ More detail is available in `docs/ARCHITECTURE.md`.
 
 ## Notes
 
-- the XML parsing logic is custom and currently optimized for simple prompt-style XML
+- the XML parsing logic is custom and currently optimized for the lightweight XML structures used by this editor
 - export escapes text and attribute values so characters like `&`, `<`, and `"` remain valid XML
 - the app is intentionally lightweight and has no front-end framework or backend service

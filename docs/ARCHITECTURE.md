@@ -78,7 +78,7 @@ The editor accepts documents with a free-form preamble followed by XML.
 3. tokenizes the XML text
 4. builds a nested tree structure from the tokens
 
-The parser is custom and lightweight. It is built for prompt-style XML rather than strict general-purpose XML compatibility.
+The parser is custom and lightweight. It is built for the editor's simple XML structure rather than strict general-purpose XML compatibility.
 
 Current parser/serializer behavior intentionally includes a few pragmatic rules:
 
